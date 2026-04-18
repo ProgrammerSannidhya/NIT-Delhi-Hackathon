@@ -1,14 +1,6 @@
 {
-"watch": ["server.js", "utils/clonerepo.js", "utils/deleterepo.js", "utils/runscan.js"],
-"ext": "js,json",
-"ignore": [
-    "node_modules/**",
-    "tests/**",
+    "ignore": [
     "utils/repos/**",
-    "**/*.log",
-    "**/results-*.csv",
-    "**/results-*.json",
-    "**/summary-*.json"
-],
-"delay": "1000"
+    "node_modules/**"   
+    ]
 }

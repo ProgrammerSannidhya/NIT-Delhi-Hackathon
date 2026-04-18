@@ -7,9 +7,9 @@ const __dirname = path.dirname(__filename);
 
 export function runScanner(repoPath) {
   return new Promise((resolve, reject) => {
-    const scriptPath = path.join(__dirname, "analyze.py");
+    const scriptPath = path.join(__dirname, "/analysis/final_analysis.py");
 
-    const process = spawn("python3", [scriptPath, repoPath]);
+    const process = spawn("python", [scriptPath, repoPath]);
 
     let stdout = "";
     let stderr = "";
@@ -57,7 +57,7 @@ export function runScanner(repoPath) {
 
       } catch {
         reject({
-          error: "Invalid JSON from analyze.py",
+          error: "Invalid JSON from final_analysis.py",
           raw: stdout,
           stderr
         });
