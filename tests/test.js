@@ -4,7 +4,7 @@ import path from "path";
 const API_URL = "http://localhost:3000/analyze";
 
 //
-// 🔹 REPO GROUPS
+// 🔹 REPO GROUPS (clean labels)
 //
 
 const LIBRARIES = [
@@ -19,7 +19,7 @@ const LIBRARIES = [
   "https://github.com/ReactiveX/rxjs",
   "https://github.com/jashkenas/underscore",
   "https://github.com/moment/moment",
-  "https://github.com/uuidjs/uuid"
+  "https://github.com/facebook/react"
 ];
 
 const FRAMEWORKS = [
@@ -27,14 +27,10 @@ const FRAMEWORKS = [
   "https://github.com/nestjs/nest",
   "https://github.com/vercel/next.js",
   "https://github.com/vuejs/core",
-  "https://github.com/facebook/react",
   "https://github.com/nuxt/nuxt",
   "https://github.com/sveltejs/kit",
   "https://github.com/emberjs/ember.js",
-  "https://github.com/fastify/fastify",
-  "https://github.com/koajs/koa",
-  "https://github.com/remix-run/remix",
-  "https://github.com/feathersjs/feathers"
+  "https://github.com/remix-run/remix"
 ];
 
 const APPLICATIONS = [
@@ -58,7 +54,6 @@ const CLI_TOOLS = [
   "https://github.com/eslint/eslint",
   "https://github.com/prettier/prettier",
   "https://github.com/httpie/cli",
-  "https://github.com/chalk/chalk",
   "https://github.com/tj/commander.js",
   "https://github.com/vercel/turbo",
   "https://github.com/nodemon/nodemon",
@@ -83,12 +78,11 @@ const PLUGINS = [
 ];
 
 //
-// 🔹 CSV BUILDER
+// 🔹 CSV
 //
 
 function toCSV(data) {
   if (!data.length) return "";
-
   const headers = Object.keys(data[0]);
 
   const rows = data.map(obj =>
@@ -102,173 +96,100 @@ function toCSV(data) {
 // 🔹 METRICS
 //
 
-function getDominanceRatio(probs) {
-  if (!probs || typeof probs !== "object") return 0;
-  const values = Object.values(probs).map(v => Number(v) || 0).sort((a, b) => b - a);
-  if (values.length < 2) return 0;
-  return values[1] === 0 ? 0 : values[0] / values[1];
-}
-
-function getVariance(probs) {
-  if (!probs || typeof probs !== "object") return 0;
-  const values = Object.values(probs).map(v => Number(v) || 0);
-  if (!values.length) return 0;
-  const mean = values.reduce((a, b) => a + b, 0) / values.length;
-  return values.reduce((sum, v) => sum + (v - mean) ** 2, 0) / values.length;
+function getTop2(probs) {
+  return Object.entries(probs || {})
+    .filter(([_, v]) => typeof v === "number")
+    .sort((a, b) => b[1] - a[1])
+    .slice(0, 2);
 }
 
 function getTopClass(probs) {
-  if (!probs || typeof probs !== "object") return "unknown";
+  return getTop2(probs)[0]?.[0] || "unknown";
+}
 
-  const entries = Object.entries(probs).filter(
-    ([, v]) => typeof v === "number" && Number.isFinite(v)
-  );
-
-  if (!entries.length) return "unknown";
-
-  entries.sort((a, b) => b[1] - a[1]);
-  return entries[0][0];
+function getGap(probs) {
+  const [a, b] = getTop2(probs);
+  return a && b ? a[1] - b[1] : 0;
 }
 
 //
-// 🔹 API CALL
+// 🔹 API CALL (FIXED: includes userType)
 //
 
-async function analyzeRepo(repoLink) {
+async function analyzeRepo(repoLink, expectedType) {
   try {
     const res = await fetch(API_URL, {
       method: "POST",
-      headers: {
-        "Content-Type": "application/json"
-      },
-      body: JSON.stringify({ repoLink })
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        repoLink,
+        userType: expectedType   // 🔥 critical fix
+      })
     });
 
-    const payload = await res.json().catch(() => ({}));
+    const json = await res.json().catch(() => ({}));
 
     if (!res.ok) {
-      return { error: true, message: payload?.message || `HTTP ${res.status}` };
+      return { error: true, message: json?.message || "HTTP error" };
     }
 
-    return payload;
+    return json;
+
   } catch (err) {
-    return { error: true, message: err?.message || "fetch failed" };
+    return { error: true, message: err.message };
   }
 }
 
 //
-// 🔹 PROCESS REPO
+// 🔹 PROCESS
 //
 
 async function processRepo(repoLink, expectedType) {
-  console.log(`Testing: ${repoLink}`);
+  console.log("Testing:", repoLink);
 
-  const result = await analyzeRepo(repoLink);
+  const result = await analyzeRepo(repoLink, expectedType);
 
-  const probs = (
-    result?.repoType?.probabilities &&
-    typeof result.repoType.probabilities === "object" &&
-    Object.keys(result.repoType.probabilities).length > 0
-  )
-    ? result.repoType.probabilities
-    : {
-        application: 0,
-        library: 0,
-        framework: 0,
-        cli: 0,
-        plugin: 0
-      };
+  const probs = result?.repoType?.probabilities || {
+    application: 0,
+    library: 0,
+    framework: 0,
+    cli: 0,
+    plugin: 0
+  };
 
   const predicted = getTopClass(probs);
-  const confidence = result?.repoType?.confidence || 0;
-  const entropy = result?.repoType?.entropy || 0;
-  const separation = result?.repoType?.separation || 0;
-
-  const dominance = getDominanceRatio(probs);
-  const variance = getVariance(probs);
-
-  const correct = predicted === expectedType;
+  const gap = getGap(probs);
 
   return {
     repo_url: repoLink,
     expected_type: expectedType,
     predicted_type: predicted,
-    confidence,
+    confidence: result?.repoType?.confidence || 0,
+    gap,
 
-    prob_application: probs.application || 0,
-    prob_library: probs.library || 0,
-    prob_framework: probs.framework || 0,
-    prob_cli: probs.cli || 0,
-    prob_plugin: probs.plugin || 0,
+    prob_application: probs.application,
+    prob_library: probs.library,
+    prob_framework: probs.framework,
+    prob_cli: probs.cli,
+    prob_plugin: probs.plugin,
 
-    entropy,
-    separation,
-    dominance_ratio: dominance,
-    variance,
-
-    correct,
+    correct: predicted === expectedType,
+    top2: JSON.stringify(getTop2(probs)),
     error: !!result?.error,
-    error_message: result?.error ? (result?.message || "analysis error") : ""
+    error_message: result?.error ? result.message : ""
   };
 }
 
 //
-// 🔹 GLOBAL STATS
-//
-
-function computeStats(results) {
-  const total = results.length || 1;
-
-  const accuracy =
-    results.filter(r => r.correct).length / total;
-
-  const avgEntropy =
-    results.reduce((s, r) => s + (Number(r.entropy) || 0), 0) / total;
-
-  const avgSeparation =
-    results.reduce((s, r) => s + (Number(r.separation) || 0), 0) / total;
-
-  const avgDominance =
-    results.reduce((s, r) => s + (Number(r.dominance_ratio) || 0), 0) / total;
-
-  const avgVariance =
-    results.reduce((s, r) => s + (Number(r.variance) || 0), 0) / total;
-
-  return {
-    total: results.length,
-    accuracy,
-    avgEntropy,
-    avgSeparation,
-    avgDominance,
-    avgVariance
-  };
-}
-
-//
-// 🔹 SAVE FILE
-//
-
-function saveResults(results) {
-  const timestamp = new Date().toISOString().replace(/[:.]/g, "-");
-  const filePath = path.join("./tests", `results-${timestamp}.csv`);
-
-  if (!fs.existsSync("./tests")) {
-    fs.mkdirSync("./tests", { recursive: true });
-  }
-
-  fs.writeFileSync(filePath, toCSV(results));
-
-  console.log(`\nSaved: ${filePath}`);
-}
-
-//
-// 🔹 RUN ALL
+// 🔹 RUNNER
 //
 
 async function runGroup(repos, type, results) {
-  console.log(`\n===== ${type.toUpperCase()} =====`);
+  console.log(`\n=== ${type.toUpperCase()} ===`);
+
   for (const repo of repos) {
-    results.push(await processRepo(repo, type));
+    const r = await processRepo(repo, type);
+    results.push(r);
   }
 }
 
@@ -281,12 +202,20 @@ async function run() {
   await runGroup(CLI_TOOLS, "cli", results);
   await runGroup(PLUGINS, "plugin", results);
 
-  saveResults(results);
+  const file = `./tests/results-${Date.now()}.csv`;
 
-  const stats = computeStats(results);
+  if (!fs.existsSync("./tests")) {
+    fs.mkdirSync("./tests", { recursive: true });
+  }
 
-  console.log("\n===== GLOBAL STATS =====");
-  console.log(stats);
+  fs.writeFileSync(file, toCSV(results));
+
+  console.log("\nSaved:", file);
+
+  const accuracy =
+    results.filter(r => r.correct).length / results.length;
+
+  console.log("\nAccuracy:", accuracy.toFixed(3));
 }
 
 run();
