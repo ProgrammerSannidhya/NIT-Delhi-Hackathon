@@ -1,42 +1,29 @@
-import { simpleGit, CleanOptions } from 'simple-git';
+// utils/clonerepo.js
 
-import path from 'path'
+import simpleGit from "simple-git";
+import path from "path";
+import fs from "fs";
 
-import { fileURLToPath } from 'url';
-import fs  from 'fs'
+// absolute base, outside utils
+const BASE_DIR = path.resolve("repos");
 
-// recreate __dirname
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = path.dirname(__filename);
+export const getReposBaseDir = () => BASE_DIR;
 
-simpleGit().clean(CleanOptions.FORCE);
-
-const cloneRepo =async(repoLink)=>{
-
-    try {
-    console.log(repoLink);
-    const repoName = repoLink.split('/').pop().replace('.git', '');
-
-
-    const git = simpleGit();
-
-    
-    const baseDir =  path.join(__dirname,'repos');
-    
-    if(!fs.existsSync(baseDir)){
-        fs.mkdirSync(baseDir);
-    }   
-
-    const target  = path.join(baseDir,`${repoName}_${Date.now()}`);
-
-    await git.clone(repoLink,target,["--depth", "1"]);
-    
-    console.log('Cloned Repo : ',repoName);
-    return target;
-    } catch (error) {
-        console.log('error from clone repo ' ,error);  
-        throw error;
+export default async function cloneRepo(repoUrl) {
+    if (!repoUrl || typeof repoUrl !== "string") {
+        throw new Error("Invalid repo URL");
     }
-}
 
-export default cloneRepo;
+    if (!fs.existsSync(BASE_DIR)) {
+        fs.mkdirSync(BASE_DIR, { recursive: true });
+    }
+
+    const repoName = repoUrl.split("/").pop().replace(".git", "");
+    const target = path.join(BASE_DIR, `${repoName}_${Date.now()}`);
+
+    console.log("CLONING INTO:", target);
+
+    await simpleGit().clone(repoUrl, target, ["--depth", "1"]);
+
+    return target; // ALWAYS absolute path inside BASE_DIR
+}
