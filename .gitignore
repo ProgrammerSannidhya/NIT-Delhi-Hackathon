@@ -2,3 +2,8 @@ node_modules
 tests/tests/
 utils/repos/
 .env
+logs/
+*.log
+tmp/
+repos/
+coverage/
