@@ -5,11 +5,7 @@ import dotenv from "dotenv";
 dotenv.config();
 
 const requiredEnv = [
-    "DB_USER",
-    "DB_HOST",
-    "DATABASE",
-    "DB_PORT",
-    "DB_PASSWORD",
+    "DATABASE_URL",
     "JWT_SECRET",
     "JWT_EXPIRES_IN"
 ];
