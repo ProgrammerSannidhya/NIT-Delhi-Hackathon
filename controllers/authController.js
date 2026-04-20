@@ -121,3 +121,12 @@ export const logout = async (req, res, next) => {
         next(err);
     }
 };
+
+/* ================= GET ME ================= */
+export const getMe = async (req, res, next) => {
+    try {
+        return success(res, req.user, "Authenticated user");
+    } catch (err) {
+        next(err);
+    }
+};
