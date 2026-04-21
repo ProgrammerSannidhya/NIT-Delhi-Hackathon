@@ -118,6 +118,7 @@ const start = async () => {
 
     } catch (err) {
         console.error("Startup failed:", err.message);
+        console.error(err.stack);
         process.exit(1);
     }
 };

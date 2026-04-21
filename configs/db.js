@@ -10,10 +10,10 @@ const { Pool } = pkg;
 export const pool = new Pool({
 connectionString: process.env.DATABASE_URL,
 ssl: {
-    rejectUnauthorized: false,
-},
+    rejectUnauthorized: false
+}
 });
 
 pool.on("connect", () => {
-console.log("Database connected");
+    console.log("Database connected");
 });
