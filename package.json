@@ -12,6 +12,8 @@
     "nodemon": "^3.1.14",
     "pg": "^8.20.0",
     "simple-git": "^3.33.0",
+    "swagger-jsdoc": "^6.2.8",
+    "swagger-ui-express": "^5.0.1",
     "winston": "^3.19.0"
   },
   "name": "backend-for-codeplus-min",
