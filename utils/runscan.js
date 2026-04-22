@@ -7,7 +7,7 @@ const __dirname = path.dirname(__filename);
 
 function runPython(script, args) {
   return new Promise((resolve, reject) => {
-    const process = spawn("python3", [script, ...args]);
+    const process = spawn("python", [script, ...args]);
 
     let stdout = "";
     let stderr = "";
