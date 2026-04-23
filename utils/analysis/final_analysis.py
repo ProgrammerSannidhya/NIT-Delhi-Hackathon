@@ -27,30 +27,88 @@ def run_cmd(cmd, cwd):
 # ---------------- TOOLS ----------------
 
 def run_knip(repo):
+    """
+    Parse knip --reporter json output.
+
+    Knip's JSON reporter emits:
+      { "issues": [ { "file": "...", "files": <bool>,
+                      "exports": [{"name": "..."}],
+                      "dependencies": [{"name": "..."}],
+                      "devDependencies": [{"name": "..."}] } ] }
+
+    Returns normalised dicts so every consumer gets consistent shapes.
+    """
     out, code = run_cmd("npx knip --reporter json", repo)
 
-    if code != 0 or not out:
-        return {"files": [], "exports": [], "dependencies": []}
+    # knip exits 1 when it finds issues (normal), 0 when clean
+    if code not in (0, 1) or not out:
+        return {"files": [], "unusedExports": [], "dependencies": []}
 
     try:
         data = json.loads(out)
+        issues = data.get("issues", [])
+
+        files = []           # list[str]  — paths of unused files
+        unused_exports = []  # list[{file, name}]
+        dep_names = []       # list[str]  — deduplicated dep names
+        seen_deps = set()
+
+        for entry in issues:
+            f = entry.get("file", "")
+
+            # "files" is a boolean flag on each issue entry
+            if entry.get("files"):
+                files.append(f)
+
+            for exp in entry.get("exports", []):
+                name = exp.get("name") or exp.get("symbol") or "?"
+                unused_exports.append({"file": f, "name": name})
+
+            raw_deps = (
+                entry.get("dependencies", []) +
+                entry.get("devDependencies", [])
+            )
+            for d in raw_deps:
+                name = (d.get("name") or d.get("symbol") or "") if isinstance(d, dict) else str(d)
+                if name and name not in seen_deps:
+                    seen_deps.add(name)
+                    dep_names.append(name)
+
         return {
-            "files": data.get("files", []),
-            "exports": data.get("exports", []),
-            "dependencies": data.get("dependencies", [])
+            "files": files,
+            "unusedExports": unused_exports,
+            "dependencies": dep_names,
         }
     except:
-        return {"files": [], "exports": [], "dependencies": []}
+        return {"files": [], "unusedExports": [], "dependencies": []}
 
 
 def run_depcheck(repo):
+    """
+    depcheck --json output:
+      { "dependencies": ["pkg-a", ...], "devDependencies": ["pkg-b", ...], ... }
+
+    Returns a deduplicated list of unused package names covering both
+    dependencies and devDependencies.
+    """
     out, code = run_cmd("npx depcheck --json", repo)
 
-    if code != 0 or not out:
+    # depcheck exits 0 (clean) or non-zero when issues found — both OK
+    if not out:
         return []
 
     try:
-        return json.loads(out).get("dependencies", [])
+        data = json.loads(out)
+        deps     = data.get("dependencies", [])
+        dev_deps = data.get("devDependencies", [])
+
+        seen   = set()
+        result = []
+        for name in deps + dev_deps:
+            if name and name not in seen:
+                seen.add(name)
+                result.append(name)
+        return result
     except:
         return []
 
@@ -127,100 +185,129 @@ def is_monorepo(repo):
 
 
 def filter_cli_files(repo, files):
+    """Remove bin entry-point files from the unused-files list."""
     entries = get_cli_entries(repo)
-
     cleaned = []
     for f in files:
         full = str((Path(repo) / f).resolve())
         if full not in entries:
             cleaned.append(f)
-
     return cleaned
 
 
 def filter_runtime_files(files):
     ignore = ["bin/", "cli", "commands", "scripts", "middleware"]
-
     return [
         f for f in files
         if not any(x in f.lower() for x in ignore)
     ]
 
 
+def make_file_objects(files, confidence, reason):
+    """Convert a list of file-path strings to the normalised object shape."""
+    return [
+        {"file": f, "confidence": confidence, "reason": reason}
+        for f in files
+    ]
+
+
 # ---------------- TYPE ANALYSIS ----------------
 
 def analyze_application(repo):
-    knip = run_knip(repo)
+    knip   = run_knip(repo)
     eslint = run_eslint(repo)
-    deps = run_depcheck(repo)
+    deps   = run_depcheck(repo)
 
-    # DO NOT hide files → just lower confidence
-    files = [
-        {
-            "file": f,
-            "confidence": 0.4,
-            "reason": "not statically referenced (may be used at runtime)"
-        }
-        for f in knip["files"]
-    ]
+    # Lower confidence: application files are often loaded at runtime
+    files = make_file_objects(
+        knip["files"],
+        confidence=0.4,
+        reason="not statically referenced (may be used at runtime)"
+    )
 
     return {
-        "files": files,
-        "unusedExports": knip["exports"],
-        "deps": deps,
-        "unusedCode": eslint,
-        "mode": "application-balanced"
+        "files":         files,
+        "unusedExports": knip["unusedExports"],   # [{file, name}]
+        "deps":          deps,                    # [str]
+        "unusedCode":    eslint,
+        "mode":          "application-balanced"
     }
 
 
 def analyze_library(repo):
-    knip = run_knip(repo)
+    knip   = run_knip(repo)
+    eslint = run_eslint(repo)
+    deps   = run_depcheck(repo)
+
+    # Libraries are fully static — high confidence
+    files = make_file_objects(
+        knip["files"],
+        confidence=0.9,
+        reason="not reachable from any entry point"
+    )
 
     return {
-        "files": knip["files"],
-        "unusedExports": knip["exports"],
-        "deps": run_depcheck(repo),
-        "unusedCode": run_eslint(repo),
-        "mode": "library-strict"
+        "files":         files,
+        "unusedExports": knip["unusedExports"],
+        "deps":          deps,
+        "unusedCode":    eslint,
+        "mode":          "library-strict"
     }
 
 
 def analyze_cli(repo):
-    knip = run_knip(repo)
+    knip   = run_knip(repo)
+    eslint = run_eslint(repo)
+    deps   = run_depcheck(repo)
 
-    files = knip["files"]
-    files = filter_cli_files(repo, files)
-    files = filter_runtime_files(files)
+    # Remove bin entries and known runtime directories before scoring
+    raw_files = filter_cli_files(repo, knip["files"])
+    raw_files = filter_runtime_files(raw_files)
+
+    files = make_file_objects(
+        raw_files,
+        confidence=0.8,
+        reason="not reachable from any entry point"
+    )
 
     return {
-        "files": files,
-        "unusedExports": knip["exports"],
-        "deps": run_depcheck(repo),
-        "unusedCode": run_eslint(repo),
-        "mode": "cli-safe"
+        "files":         files,
+        "unusedExports": knip["unusedExports"],
+        "deps":          deps,
+        "unusedCode":    eslint,
+        "mode":          "cli-safe"
     }
 
 
 def analyze_plugin(repo):
-    knip = run_knip(repo)
+    knip   = run_knip(repo)
+    eslint = run_eslint(repo)
+    deps   = run_depcheck(repo)
+
+    files = make_file_objects(
+        knip["files"],
+        confidence=0.85,
+        reason="not reachable from any entry point"
+    )
 
     return {
-        "files": knip["files"],
-        "unusedExports": knip["exports"],
-        "deps": run_depcheck(repo),
-        "unusedCode": run_eslint(repo),
-        "mode": "plugin"
+        "files":         files,
+        "unusedExports": knip["unusedExports"],
+        "deps":          deps,
+        "unusedCode":    eslint,
+        "mode":          "plugin"
     }
 
 
 def analyze_framework(repo):
-    # monorepo → file-level unreliable
+    # Monorepos / frameworks: file-level analysis is unreliable
+    # Focus only on dependency analysis
     return {
-        "files": [],
+        "files":         [],
         "unusedExports": [],
-        "deps": run_depcheck(repo),
-        "unusedCode": run_eslint(repo),
-        "mode": "monorepo-safe"
+        "deps":          run_depcheck(repo),
+        "unusedCode":    run_eslint(repo),
+        "mode":          "monorepo-safe"
     }
 
 
@@ -228,29 +315,22 @@ def analyze_framework(repo):
 
 def main():
     if len(sys.argv) < 3:
-        print(json.dumps({"error": "usage: repoPath finalType"}))
+        print(json.dumps({"error": "usage: final_analysis.py <repoPath> <finalType>"}))
         return
 
-    repo = sys.argv[1]
+    repo       = sys.argv[1]
     final_type = sys.argv[2]
 
-    if final_type == "application":
-        result = analyze_application(repo)
+    dispatch = {
+        "application": analyze_application,
+        "library":     analyze_library,
+        "cli":         analyze_cli,
+        "plugin":      analyze_plugin,
+        "framework":   analyze_framework,
+    }
 
-    elif final_type == "library":
-        result = analyze_library(repo)
-
-    elif final_type == "cli":
-        result = analyze_cli(repo)
-
-    elif final_type == "plugin":
-        result = analyze_plugin(repo)
-
-    elif final_type == "framework":
-        result = analyze_framework(repo)
-
-    else:
-        result = analyze_application(repo)
+    analyze = dispatch.get(final_type, analyze_application)
+    result  = analyze(repo)
 
     print(json.dumps(result, indent=2))
 

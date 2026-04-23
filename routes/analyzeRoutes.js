@@ -7,11 +7,13 @@ import { allowRoles } from "../middleware/roleMiddleware.js";
 
 const router = express.Router();
 
+const VALID_TYPES = ["application", "library", "framework", "cli", "plugin"];
+
 /**
  * @swagger
  * /analyze:
  *   post:
- *     summary: Analyze a GitHub repository
+ *     summary: Analyze a GitHub repository for dead code
  *     security:
  *       - bearerAuth: []
  *     tags:
@@ -22,11 +24,18 @@ const router = express.Router();
  *         application/json:
  *           schema:
  *             type: object
+ *             required:
+ *               - repoLink
  *             properties:
  *               repoLink:
  *                 type: string
+ *                 example: "https://github.com/user/repo"
  *               userType:
  *                 type: string
+ *                 enum: [application, library, framework, cli, plugin]
+ *                 description: >
+ *                   Optional. When provided, forces this repo type instead of
+ *                   the auto-detected one (override = true).
  *     responses:
  *       200:
  *         description: Analysis result
@@ -34,12 +43,21 @@ const router = express.Router();
  *         description: Invalid input
  *       401:
  *         description: Unauthorized
+ *       500:
+ *         description: Analysis failed
  */
 router.post("/", protect, allowRoles("admin", "user"), async (req, res, next) => {
     let repoPath;
+    if (!req.body || typeof req.body !== "object") {
+    return res.status(400).json({
+        error: "Request body is missing or not JSON. Set Content-Type: application/json."
+    });
+}
 
     try {
         const { repoLink, userType } = req.body;
+
+        // --- input validation -------------------------------------------
 
         if (!repoLink || typeof repoLink !== "string") {
             return res.status(400).json({ error: "Invalid repoLink" });
@@ -47,13 +65,29 @@ router.post("/", protect, allowRoles("admin", "user"), async (req, res, next) =>
 
         if (!repoLink.startsWith("https://github.com/")) {
             return res.status(400).json({
-                error: "Only GitHub repos allowed"
+                error: "Only GitHub repos are allowed"
             });
         }
 
+        // userType is optional; if provided it must be one of the known values
+        if (userType !== undefined && userType !== null) {
+            if (typeof userType !== "string" || !VALID_TYPES.includes(userType)) {
+                return res.status(400).json({
+                    error: `Invalid userType. Must be one of: ${VALID_TYPES.join(", ")}`
+                });
+            }
+        }
+
+        // --- pipeline ---------------------------------------------------
+
         repoPath = await cloneRepo(repoLink);
 
-        const result = await runScanner(repoPath, userType);
+        // Pass override=true only when the caller explicitly supplied a type.
+        // This matches the new runScanner(repoPath, userType, override) signature:
+        //   override=false → autoType always wins (userType ignored)
+        //   override=true  → userType forces the analysis mode
+        const override = Boolean(userType);
+        const result   = await runScanner(repoPath, userType ?? null, override);
 
         if (result?.error) {
             return res.status(500).json({ error: result.error });
