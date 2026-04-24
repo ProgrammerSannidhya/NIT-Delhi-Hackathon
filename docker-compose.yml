@@ -3,7 +3,13 @@ services:
     build: .
     ports:
       - "3000:3000"
-    env_file:
-      - .env
+    depends_on:
+      - redis
     environment:
-      NODE_OPTIONS: "--dns-result-order=ipv4first"
+      - REDIS_HOST=redis
+      - REDIS_PORT=6379
+
+  redis:
+    image: redis:7
+    ports:
+      - "6379:6379"
