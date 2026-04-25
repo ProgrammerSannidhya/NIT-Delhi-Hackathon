@@ -4,9 +4,12 @@ import json
 import subprocess
 import sys
 import re
+import shlex
 from pathlib import Path
 
-# ---------------- UTIL ----------------
+# ──────────────────────────────────────────────────────────────────
+# UTIL
+# ──────────────────────────────────────────────────────────────────
 
 def run_cmd(cmd, cwd):
     try:
@@ -23,7 +26,10 @@ def run_cmd(cmd, cwd):
         sys.stderr.write(f"[ERROR] run_cmd failed: {e}\n")
         return "", -1
 
-# ---------------- SETUP ----------------
+
+# ──────────────────────────────────────────────────────────────────
+# SETUP
+# ──────────────────────────────────────────────────────────────────
 
 def install_deps(repo):
     installed = False
@@ -38,7 +44,47 @@ def install_deps(repo):
     if installed:
         sys.stderr.write("[INFO] npm install done\n")
 
-# ---------------- FALSE-POSITIVE CONTEXT ----------------
+
+# ──────────────────────────────────────────────────────────────────
+# IMPROVEMENT A — test file detection
+# Test files imported only by the test runner are not dead code.
+# Was: not considered at all — test-only helpers were flagged as unused.
+# ──────────────────────────────────────────────────────────────────
+_TEST_PATH_PATTERNS = re.compile(
+    r'(^|/)(__tests__|tests?|spec|cypress|e2e|fixtures?|mocks?|__mocks__)(/|$)'
+    r'|\.(?:test|spec)\.[jt]sx?$',
+    re.IGNORECASE,
+)
+
+def _is_test_file(path_str: str) -> bool:
+    return bool(_TEST_PATH_PATTERNS.search(path_str))
+
+
+# ──────────────────────────────────────────────────────────────────
+# IMPROVEMENT B — precise script command extraction
+# Was: re.findall(r'[\w][\w\-\.]+', script_val) matched every word
+# in the script string (including "node", "dist", "js", path parts).
+# Now: only the first token of each shell segment is taken.
+# ──────────────────────────────────────────────────────────────────
+def _extract_script_commands(script_val: str) -> set:
+    tokens = set()
+    try:
+        for segment in re.split(r'[&|;]', script_val):
+            segment = segment.strip()
+            if not segment:
+                continue
+            parts = shlex.split(segment)
+            if parts:
+                tokens.add(parts[0].split("/")[-1])
+    except Exception:
+        for token in re.findall(r'[\w][\w\-]+', script_val):
+            tokens.add(token)
+    return tokens
+
+
+# ──────────────────────────────────────────────────────────────────
+# FALSE-POSITIVE CONTEXT
+# ──────────────────────────────────────────────────────────────────
 
 def get_repo_context(repo):
     ctx = {
@@ -49,6 +95,10 @@ def get_repo_context(repo):
         "has_dynamic_require": False,
         "script_used_deps":    set(),
         "ci_used_deps":        set(),
+        # IMPROVEMENT C — re-export barrel index detection
+        "barrel_files":        set(),
+        # IMPROVEMENT D — .gitignore / .npmignore aware ignore list
+        "ignored_paths":       set(),
     }
     repo = Path(repo)
 
@@ -66,8 +116,9 @@ def get_repo_context(repo):
             ctx["has_ci"] = True
             try:
                 text = (repo / ci).read_text(errors="ignore") if (repo / ci).is_file() else ""
-                ctx["ci_used_deps"].update(re.findall(r'[\w][\w\-\.]+', text))
-            except:
+                # IMPROVEMENT B — only extract command tokens from CI, not every word
+                ctx["ci_used_deps"].update(_extract_script_commands(text))
+            except Exception:
                 pass
             break
 
@@ -78,8 +129,9 @@ def get_repo_context(repo):
         try:
             data = json.loads(pkg.read_text())
             for script_val in data.get("scripts", {}).values():
-                ctx["script_used_deps"].update(re.findall(r'[\w][\w\-\.]+', script_val))
-        except:
+                # IMPROVEMENT B — precise command extraction
+                ctx["script_used_deps"].update(_extract_script_commands(script_val))
+        except Exception:
             pass
 
     dynamic_patterns = [
@@ -94,12 +146,44 @@ def get_repo_context(repo):
             if any(re.search(p, content) for p in dynamic_patterns):
                 ctx["has_dynamic_require"] = True
                 break
-        except:
+        except Exception:
             pass
+
+    # IMPROVEMENT C — detect barrel/index re-export files
+    # These files exist purely to re-export from sub-modules.
+    # Knip may flag their individual exports as unused even though
+    # they are the public surface of the package.
+    barrel_re = re.compile(r'^\s*export\s*\*\s*from\s*["\']', re.MULTILINE)
+    for idx_file in list(repo.rglob("index.[jt]s")) + list(repo.rglob("index.[jt]sx")):
+        try:
+            content = idx_file.read_text(errors="ignore")
+            if barrel_re.search(content):
+                ctx["barrel_files"].add(str(idx_file.resolve()))
+        except Exception:
+            pass
+
+    # IMPROVEMENT D — load ignore patterns from .gitignore / .npmignore
+    import fnmatch
+    for fname in [".gitignore", ".npmignore"]:
+        ig = repo / fname
+        if not ig.exists():
+            continue
+        for line in ig.read_text(errors="ignore").splitlines():
+            line = line.strip()
+            if not line or line.startswith("#"):
+                continue
+            # Match against all tracked files and record hits
+            for f in repo.rglob("*"):
+                rel = str(f.relative_to(repo))
+                if fnmatch.fnmatch(rel, line) or fnmatch.fnmatch(f.name, line):
+                    ctx["ignored_paths"].add(rel)
 
     return ctx
 
-# ---------------- CONFIDENCE SCORING ----------------
+
+# ──────────────────────────────────────────────────────────────────
+# CONFIDENCE SCORING
+# ──────────────────────────────────────────────────────────────────
 
 KNOWN_CLI_ONLY_DEPS = {
     "grunt", "gulp", "webpack", "rollup", "babel", "tsc", "typescript",
@@ -108,6 +192,9 @@ KNOWN_CLI_ONLY_DEPS = {
     "serve", "concurrently", "nodemon", "ts-node", "cross-env", "rimraf",
     "mkdirp", "copyfiles", "npm-run-all", "husky", "lint-staged",
     "standard", "xo", "ava", "tap", "nsp", "snyk", "ecstatic", "http-server",
+    # IMPROVEMENT B additions — commonly appear in script strings as words,
+    # not as require()'d packages
+    "node", "npx", "sh", "bash", "echo", "exit", "rm", "cp", "mv", "cat",
 }
 
 KNOWN_DYNAMIC_FILE_PATTERNS = [
@@ -121,10 +208,12 @@ KNOWN_DYNAMIC_EXPORT_PATTERNS = [
     r"Default", r"^alias", r"ToReal$", r"ToAlias$",
 ]
 
+
 def score_dep(dep_name, ctx):
     name = dep_name.lower().strip()
     if name in KNOWN_CLI_ONLY_DEPS:
         return False, 0.0, "CLI-only tool, not require()'d"
+    # IMPROVEMENT B — script_used_deps now only contains actual command names
     if name in ctx["script_used_deps"] or name.replace("-", "") in ctx["script_used_deps"]:
         return False, 0.0, "referenced in npm scripts"
     if name in ctx["ci_used_deps"]:
@@ -137,7 +226,12 @@ def score_dep(dep_name, ctx):
         return True, 0.5, "TypeScript type package, may be indirect"
     return True, 0.85, "not found in import graph"
 
+
 def score_export(symbol, file_path, ctx):
+    # IMPROVEMENT C — exports from barrel index files are likely public API
+    if str(Path(file_path).resolve()) in ctx.get("barrel_files", set()):
+        return True, 0.2, "barrel/index re-export file — likely public API"
+
     if ctx["has_dynamic_require"]:
         for pat in KNOWN_DYNAMIC_EXPORT_PATTERNS:
             if re.search(pat, symbol, re.IGNORECASE):
@@ -148,8 +242,18 @@ def score_export(symbol, file_path, ctx):
             return True, 0.35, "naming pattern suggests dynamic access"
     return True, 0.8, "not found in static import graph"
 
+
 def score_file(file_path, ctx):
     fp = file_path.lower()
+
+    # IMPROVEMENT A — test files are never dead code
+    if _is_test_file(fp):
+        return False, 0.0, "test file — excluded from dead-code analysis"
+
+    # IMPROVEMENT D — files in .gitignore/.npmignore are intentionally excluded
+    if file_path in ctx.get("ignored_paths", set()):
+        return False, 0.0, "listed in .gitignore/.npmignore — intentionally excluded"
+
     for pat in KNOWN_DYNAMIC_FILE_PATTERNS:
         if re.search(pat, fp):
             return True, 0.3, "path pattern suggests dynamic loading"
@@ -157,7 +261,10 @@ def score_file(file_path, ctx):
         return True, 0.4, "dynamic require patterns detected"
     return True, 0.75, "not statically imported"
 
-# ---------------- FILTERING ----------------
+
+# ──────────────────────────────────────────────────────────────────
+# FILTERING
+# ──────────────────────────────────────────────────────────────────
 
 def filter_deps(raw_deps, ctx):
     result = []
@@ -167,6 +274,7 @@ def filter_deps(raw_deps, ctx):
         if keep and conf > 0:
             result.append({"name": name, "confidence": conf, "reason": reason})
     return result
+
 
 def filter_exports(raw_exports, ctx):
     result = []
@@ -178,16 +286,24 @@ def filter_exports(raw_exports, ctx):
             result.append({**exp, "confidence": conf, "reason": reason})
     return result
 
+
 def filter_files(raw_files, ctx, max_confidence=0.75):
     result = []
     for f in raw_files:
         file_path = f if isinstance(f, str) else f.get("file", "")
         keep, conf, reason = score_file(file_path, ctx)
         if keep:
-            result.append({"file": file_path, "confidence": min(conf, max_confidence), "reason": reason})
+            result.append({
+                "file":       file_path,
+                "confidence": min(conf, max_confidence),
+                "reason":     reason,
+            })
     return result
 
-# ---------------- TOOLS ----------------
+
+# ──────────────────────────────────────────────────────────────────
+# TOOLS
+# ──────────────────────────────────────────────────────────────────
 
 def run_knip(repo):
     install_deps(repo)
@@ -201,7 +317,7 @@ def run_knip(repo):
         sys.stderr.write(f"[ERROR] knip JSON parse failed: {e}\nRaw: {out[:500]}\n")
         return {"files": [], "exports": [], "dependencies": []}
 
-    files = data.get("files", [])
+    files   = data.get("files", [])
     exports = []
     for issue in data.get("issues", []):
         file_path = issue.get("file", "unknown")
@@ -229,7 +345,7 @@ def run_depcheck(repo):
         sys.stderr.write(f"[WARN] depcheck returned no output (exit {code})\n")
         return []
     try:
-        data = json.loads(out)
+        data      = json.loads(out)
         prod_deps = data.get("dependencies", [])
         dev_deps  = data.get("devDependencies", [])
         if isinstance(prod_deps, dict): prod_deps = list(prod_deps.keys())
@@ -241,19 +357,40 @@ def run_depcheck(repo):
 
 
 def run_eslint(repo):
-    eslint_config = json.dumps({
-        "env": {"es2021": True, "node": True},
-        "rules": {"no-unused-vars": "error"},
-        "parserOptions": {"ecmaVersion": 2021, "sourceType": "module"}
-    })
-    config_path = Path(repo) / ".eslint_dead_scan.json"
-    try:
-        config_path.write_text(eslint_config)
-        cmd = 'npx --yes eslint . -f json --no-eslintrc -c .eslint_dead_scan.json --ext .js,.mjs,.cjs 2>/dev/null'
-        out, _ = run_cmd(cmd, repo)
-    finally:
-        if config_path.exists():
-            config_path.unlink()
+    # IMPROVEMENT E — honour existing ESLint config if present.
+    # Was: always overrode with --no-eslintrc which ignored project-level
+    # rules (e.g. TypeScript parser, custom no-unused-vars config).
+    has_existing_config = any(
+        (Path(repo) / f).exists()
+        for f in [
+            ".eslintrc", ".eslintrc.js", ".eslintrc.cjs", ".eslintrc.json",
+            ".eslintrc.yaml", ".eslintrc.yml", "eslint.config.js",
+            "eslint.config.mjs", "eslint.config.cjs",
+        ]
+    )
+
+    if has_existing_config:
+        # Use the project's own config — just ask for JSON output
+        cmd = "npx --yes eslint . -f json --ext .js,.mjs,.cjs,.ts,.tsx 2>/dev/null"
+    else:
+        # No config present — inject a minimal one
+        eslint_config = json.dumps({
+            "env":           {"es2021": True, "node": True},
+            "rules":         {"no-unused-vars": "error"},
+            "parserOptions": {"ecmaVersion": 2021, "sourceType": "module"},
+        })
+        config_path = Path(repo) / ".eslint_dead_scan.json"
+        try:
+            config_path.write_text(eslint_config)
+            cmd = (
+                "npx --yes eslint . -f json --no-eslintrc "
+                "-c .eslint_dead_scan.json --ext .js,.mjs,.cjs 2>/dev/null"
+            )
+        finally:
+            if config_path.exists():
+                config_path.unlink()
+
+    out, _ = run_cmd(cmd, repo)
 
     results = []
     if not out:
@@ -262,16 +399,26 @@ def run_eslint(repo):
         data = json.loads(out)
         for file_report in data:
             fpath = file_report.get("filePath", "")
+            # IMPROVEMENT A — skip test files from ESLint results too
+            if _is_test_file(fpath):
+                continue
             for msg in file_report.get("messages", []):
                 rule = msg.get("ruleId") or ""
                 if "unused" in rule:
-                    results.append({"file": fpath, "line": msg.get("line"),
-                                    "message": msg.get("message"), "confidence": 0.9})
+                    results.append({
+                        "file":       fpath,
+                        "line":       msg.get("line"),
+                        "message":    msg.get("message"),
+                        "confidence": 0.9,
+                    })
     except json.JSONDecodeError:
         pass
     return results
 
-# ---------------- HELPERS ----------------
+
+# ──────────────────────────────────────────────────────────────────
+# HELPERS
+# ──────────────────────────────────────────────────────────────────
 
 def get_package_json(repo):
     pkg = Path(repo) / "package.json"
@@ -282,23 +429,29 @@ def get_package_json(repo):
     except Exception:
         return {}
 
+
 def get_cli_entries(repo):
-    data = get_package_json(repo)
+    data    = get_package_json(repo)
     entries = []
     bin_field = data.get("bin", {})
     if isinstance(bin_field, dict): entries.extend(bin_field.values())
     elif isinstance(bin_field, str): entries.append(bin_field)
     return [str((Path(repo) / e).resolve()) for e in entries if (Path(repo) / e).exists()]
 
+
 def filter_cli_files(repo, files):
     entries = get_cli_entries(repo)
     return [f for f in files if str((Path(repo) / f).resolve()) not in entries]
+
 
 def filter_runtime_files(files):
     ignore = ["bin/", "cli", "commands", "scripts", "middleware"]
     return [f for f in files if not any(x in f.lower() for x in ignore)]
 
-# ---------------- TYPE ANALYSIS ----------------
+
+# ──────────────────────────────────────────────────────────────────
+# TYPE ANALYSIS
+# ──────────────────────────────────────────────────────────────────
 
 def analyze_application(repo):
     ctx    = get_repo_context(repo)
@@ -313,6 +466,7 @@ def analyze_application(repo):
         "mode":          "application-balanced",
     }
 
+
 def analyze_library(repo):
     ctx  = get_repo_context(repo)
     knip = run_knip(repo)
@@ -323,6 +477,7 @@ def analyze_library(repo):
         "unusedCode":    run_eslint(repo),
         "mode":          "library-strict",
     }
+
 
 def analyze_cli(repo):
     ctx   = get_repo_context(repo)
@@ -336,6 +491,7 @@ def analyze_cli(repo):
         "mode":          "cli-safe",
     }
 
+
 def analyze_plugin(repo):
     ctx  = get_repo_context(repo)
     knip = run_knip(repo)
@@ -347,6 +503,7 @@ def analyze_plugin(repo):
         "mode":          "plugin",
     }
 
+
 def analyze_framework(repo):
     ctx = get_repo_context(repo)
     return {
@@ -357,7 +514,10 @@ def analyze_framework(repo):
         "mode":          "monorepo-safe",
     }
 
-# ---------------- MAIN ----------------
+
+# ──────────────────────────────────────────────────────────────────
+# MAIN
+# ──────────────────────────────────────────────────────────────────
 
 def main():
     if len(sys.argv) < 3:
@@ -382,6 +542,7 @@ def main():
     analyze_fn = dispatch.get(final_type, analyze_application)
     result     = analyze_fn(repo)
     print(json.dumps(result, indent=2))
+
 
 if __name__ == "__main__":
     main()
