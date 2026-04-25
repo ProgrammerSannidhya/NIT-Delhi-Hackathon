@@ -1,29 +1,32 @@
-// utils/clonerepo.js
-
 import simpleGit from "simple-git";
 import path from "path";
 import fs from "fs";
 
-// absolute base, outside utils
 const BASE_DIR = path.resolve("repos");
 
 export const getReposBaseDir = () => BASE_DIR;
 
-export default async function cloneRepo(repoUrl) {
-    if (!repoUrl || typeof repoUrl !== "string") {
-        throw new Error("Invalid repo URL");
-    }
+export async function cloneRepo(repoUrl) {
+if (!repoUrl || typeof repoUrl !== "string") {
+throw new Error("Invalid repo URL");
+}
 
-    if (!fs.existsSync(BASE_DIR)) {
-        fs.mkdirSync(BASE_DIR, { recursive: true });
-    }
+if (!fs.existsSync(BASE_DIR)) {
+    fs.mkdirSync(BASE_DIR, { recursive: true });
+}
 
-    const repoName = repoUrl.split("/").pop().replace(".git", "");
-    const target = path.join(BASE_DIR, `${repoName}_${Date.now()}`);
+const repoName = repoUrl
+    .split("/")
+    .pop()
+    .replace(".git", "");
 
-    console.log("CLONING INTO:", target);
+const target = path.join(BASE_DIR, `${repoName}_${Date.now()}`);
 
-    await simpleGit().clone(repoUrl, target, ["--depth", "1"]);
+console.log("CLONING INTO:", target);
 
-    return target; // ALWAYS absolute path inside BASE_DIR
+await simpleGit().clone(repoUrl, target, ["--depth", "1"]);
+
+return target;
+
+
 }

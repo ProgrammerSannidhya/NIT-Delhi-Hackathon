@@ -22,16 +22,31 @@ import { success, fail } from "../utils/response.js";
 
 /* ================= REGISTER ================= */
 export const register = async (req, res, next) => {
-    try {
-        const { username, password } = req.body;
+try {
+if (!req.body) {
+return res.status(400).json({
+error: "Request body missing"
+});
+}
 
-        const user = await registerUser(username, password);
 
-        return success(res, user, "User registered", 201);
+    const { username, password } = req.body;
 
-    } catch (err) {
-        next(err);
+    if (!username || !password) {
+        return res.status(400).json({
+            error: "username and password required"
+        });
     }
+
+    const user = await registerUser(username, password);
+
+    return success(res, user, "User registered", 201);
+
+} catch (err) {
+    next(err);
+}
+
+
 };
 
 /* ================= LOGIN ================= */
