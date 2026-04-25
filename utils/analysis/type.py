@@ -3,15 +3,13 @@
 import json
 import math
 import re
+import sys
 from pathlib import Path
-
 
 REPO_TYPES = ["application", "library", "framework", "cli", "plugin"]
 
-
 def clamp(v, lo, hi):
     return max(lo, min(hi, v))
-
 
 def read_text(path, limit=6000):
     try:
@@ -19,14 +17,13 @@ def read_text(path, limit=6000):
     except:
         return ""
 
-
 def safe_div(a, b):
     return a / b if b else 0
 
-
 # ---------------- SIGNAL EXTRACTION ----------------
 
-def extract_signals(repo):
+def extract_signals(repo_path):
+    repo = Path(repo_path)
     signals = {
         "name": repo.name.lower(),
         "has_bin": False,
@@ -36,55 +33,64 @@ def extract_signals(repo):
         "dev_deps": 0,
         "peer_deps": 0,
         "has_runtime_indicators": False,
-        "structure": [],
+        "has_scripts": [],
+        "keywords": []
     }
 
     corpus = []
-
     pkg = repo / "package.json"
+    
     if pkg.exists():
         try:
             data = json.loads(pkg.read_text())
-
             signals["name"] = data.get("name", signals["name"]).lower()
-            signals["deps"] += len(data.get("dependencies", {}))
-            signals["dev_deps"] += len(data.get("devDependencies", {}))
-            signals["peer_deps"] += len(data.get("peerDependencies", {}))
+            
+            deps = data.get("dependencies", {})
+            dev_deps = data.get("devDependencies", {})
+            peer_deps = data.get("peerDependencies", {})
+            
+            signals["deps"] = len(deps)
+            signals["dev_deps"] = len(dev_deps)
+            signals["peer_deps"] = len(peer_deps)
 
             if data.get("bin"):
                 signals["has_bin"] = True
-
-            if data.get("peerDependencies"):
+            if peer_deps:
                 signals["is_plugin"] = True
-
             if data.get("workspaces"):
                 signals["is_monorepo"] = True
 
+            # Check scripts for application indicators
+            scripts = data.get("scripts", {})
+            signals["has_scripts"] = list(scripts.keys())
+            
+            signals["keywords"] = data.get("keywords", [])
             corpus.append(data.get("description", ""))
-            corpus.extend(data.get("keywords", []))
+            corpus.extend(signals["keywords"])
+
+            # Specific heavy-weight indicators
+            if any(k in deps for k in ["express", "next", "react", "vue", "fastify", "nodemon"]):
+                signals["has_runtime_indicators"] = True
 
         except:
             pass
 
-    # structure signals (not filenames, categories)
-    if (repo / "bin").exists():
+    # Structure checks
+    if (repo / "bin").exists() or (repo / "scripts").exists():
         signals["has_bin"] = True
-
-    if (repo / "packages").exists():
+    if (repo / "packages").exists() and (repo / "lerna.json").exists():
         signals["is_monorepo"] = True
-
     if (repo / "plugins").exists():
         signals["is_plugin"] = True
 
-    # runtime indicators (strong application signal)
-    runtime_files = ["dockerfile", "docker-compose.yml", "manage.py"]
-    for f in runtime_files:
-        if any(str(p).lower().endswith(f) for p in repo.rglob("*")):
+    runtime_files = ["dockerfile", "docker-compose.yml", "procfile", ".env.example"]
+    for p in repo.glob("*"):
+        if p.name.lower() in runtime_files:
             signals["has_runtime_indicators"] = True
             break
 
     # README
-    for r in ["README.md", "readme.md"]:
+    for r in ["README.md", "readme.md", "README.txt"]:
         p = repo / r
         if p.exists():
             corpus.append(read_text(p))
@@ -92,119 +98,97 @@ def extract_signals(repo):
 
     return signals, " ".join(corpus).lower()
 
-
 # ---------------- CLASSIFICATION ----------------
 
 def classify(signals, corpus):
+    # Start with 0 to ensure we aren't stuck at 0.2
+    scores = {t: 0.5 for t in REPO_TYPES}
 
-    scores = {t: 1.0 for t in REPO_TYPES}
-
-    # ---------- strong signals ----------
-
+    # 1. Strong Technical Signals
     if signals["has_bin"]:
-        scores["cli"] += 8
-
-    if signals["is_plugin"]:
-        scores["plugin"] += 8
-
-    if signals["is_monorepo"]:
-        scores["framework"] += 5
+        scores["cli"] += 10
         scores["application"] += 2
 
-    if signals["has_runtime_indicators"]:
-        scores["application"] += 7
+    if signals["is_plugin"] or "plugin" in signals["keywords"]:
+        scores["plugin"] += 12
 
-    # dependency shape
-    if signals["peer_deps"] > 0:
-        scores["plugin"] += 5
-
-    if signals["deps"] > 20 and signals["dev_deps"] > signals["deps"]:
-        scores["framework"] += 3
-
-    if signals["deps"] < 5 and signals["dev_deps"] > signals["deps"]:
-        scores["library"] += 3
-
-    # ---------- name signals ----------
-
-    name = signals["name"]
-
-    if "plugin" in name:
-        scores["plugin"] += 5
-
-    if name.endswith("-cli") or name.startswith("cli-"):
-        scores["cli"] += 5
-
-    if any(x in name for x in ["framework", "runtime", "core"]):
-        scores["framework"] += 4
-
-    # ---------- corpus signals ----------
-
-    if "command line" in corpus or "cli" in corpus:
-        scores["cli"] += 3
-
-    if "plugin" in corpus or "extension" in corpus:
-        scores["plugin"] += 3
-
-    if "framework" in corpus:
-        scores["framework"] += 3
-
-    if "library" in corpus or "package" in corpus:
-        scores["library"] += 3
-
-    if "web app" in corpus or "application" in corpus:
+    if signals["is_monorepo"]:
+        scores["framework"] += 8
         scores["application"] += 3
 
-    # ---------- conflict resolution ----------
+    if signals["has_runtime_indicators"]:
+        scores["application"] += 8
 
-    if scores["cli"] > 10:
-        scores["library"] *= 0.4
+    # 2. Dependency Shape
+    if signals["peer_deps"] > 0:
+        scores["plugin"] += 5
+        scores["library"] += 2
 
-    if scores["plugin"] > 10:
-        scores["application"] *= 0.5
+    if signals["deps"] > 15:
+        scores["application"] += 4
+    elif signals["deps"] > 0:
+        scores["library"] += 3
 
-    # ---------- normalization ----------
+    # 3. Script Analysis
+    if any(s in signals["has_scripts"] for s in ["start", "serve", "dev"]):
+        scores["application"] += 5
+    if "build" in signals["has_scripts"] and scores["library"] > 1:
+        scores["library"] += 3
 
+    # 4. Name & Keyword Signals
+    name = signals["name"]
+    if "cli" in name or name.endswith("-tool"):
+        scores["cli"] += 7
+    if "framework" in name or "core" in name:
+        scores["framework"] += 5
+    if "lib" in name or "sdk" in name:
+        scores["library"] += 6
+
+    # 5. Corpus Regex Analysis
+    if re.search(r"\b(command line|terminal|args|flags)\b", corpus):
+        scores["cli"] += 4
+    if re.search(r"\b(api|middleware|frontend|backend|app)\b", corpus):
+        scores["application"] += 4
+    if re.search(r"\b(npm install|import {)\b", corpus):
+        scores["library"] += 3
+
+    # 6. Conflict Resolution
+    if scores["cli"] > 8: scores["library"] *= 0.5
+    if scores["plugin"] > 8: scores["application"] *= 0.5
+
+    # 7. Normalization (Softmax)
     max_score = max(scores.values())
-
-    exps = {
-        k: math.exp(clamp(v - max_score, -50, 50))
-        for k, v in scores.items()
-    }
-
+    # Subtracting max helps numerical stability
+    exps = {k: math.exp(clamp(v - max_score, -50, 50)) for k, v in scores.items()}
     total = sum(exps.values())
-
     probs = {k: round(safe_div(v, total), 4) for k, v in exps.items()}
 
-    top = max(probs, key=probs.get)
-
+    top_type = max(probs, key=probs.get)
     sorted_probs = sorted(probs.values(), reverse=True)
-
+    
+    # If top score is very close to second, confidence is lower
     confidence = sorted_probs[0]
     separation = sorted_probs[0] - sorted_probs[1] if len(sorted_probs) > 1 else 0
 
     return {
-        "type": top,
+        "type": top_type,
         "probabilities": probs,
-        "confidence": round(confidence, 4),
-        "separation": round(separation, 4),
+        "confidence": confidence,
+        "separation": separation
     }
-
-
-# ---------------- MAIN ----------------
 
 def main(repo_path):
     repo = Path(repo_path)
-
     if not repo.exists():
         print(json.dumps({"error": "invalid path"}))
         return
 
     signals, corpus = extract_signals(repo)
     result = classify(signals, corpus)
-
     print(json.dumps(result, indent=2))
 
-
 if __name__ == "__main__":
-    import sys
-    main(sys.argv[1])
+    if len(sys.argv) > 1:
+        main(sys.argv[1])
+    else:
+        print(json.dumps({"error": "no path provided"}))
