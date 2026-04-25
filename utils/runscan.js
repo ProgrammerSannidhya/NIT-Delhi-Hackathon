@@ -9,17 +9,10 @@ const __dirname = path.dirname(__filename);
 
 /**
  * Spawns a Python script and resolves with the parsed JSON output.
- *
- * BUG FIXED 1: `python` is not available on most Ubuntu/Debian systems —
- *   only `python3` is. Changed spawn target from "python" to "python3".
- *
- * BUG FIXED 2: The local variable was named `process`, which shadows
- *   the Node.js global `process` object. Renamed to `child` for clarity.
  */
 function runPython(script, args) {
   return new Promise((resolve, reject) => {
-    // FIX 1: use "python3", not "python"
-    const child = spawn("python", [script, ...args]);
+    const child = spawn("python3", [script, ...args]);
 
     let stdout = "";
     let stderr = "";
@@ -28,7 +21,6 @@ function runPython(script, args) {
       stdout += data.toString();
     });
 
-    // Capture stderr so caller can see warnings / debug info from Python
     child.stderr.on("data", (data) => {
       stderr += data.toString();
     });
@@ -41,7 +33,6 @@ function runPython(script, args) {
       try {
         const parsed = JSON.parse(stdout.trim());
 
-        // Surface any error the Python script embedded in JSON
         if (parsed?.error) {
           return reject({ message: parsed.error, stderr });
         }
@@ -57,7 +48,6 @@ function runPython(script, args) {
     });
 
     child.on("error", (err) => {
-      // Give a helpful message if python3 is simply not found
       const hint =
         err.code === "ENOENT"
           ? " — is python3 installed and in PATH?"
@@ -76,22 +66,78 @@ export async function runScanner(repoPath, userType = null) {
     // Step 1: Auto-detect repo type
     const detected = await runPython(detectorPath, [repoPath]);
 
-    const autoType  = detected?.type       || "application";
-    const confidence = detected?.confidence || 0;
+    const autoType        = detected?.type            || "application";
+    const confidence      = detected?.confidence      || 0;
+    const confidenceTier  = detected?.confidence_tier || "uncertain";
+    const rawScores       = detected?.rawScores       || {};
 
-    // Step 2: User override takes precedence, otherwise use auto-detected type
-    const finalType = userType || autoType;
+    // Step 2: Smart override logic
+    //
+    // BUG FIXED: The old code did `const finalType = userType || autoType`
+    // which ALWAYS ran the user-supplied type, even when auto-detection was
+    // high-confidence. This caused lodash (correctly detected as "library")
+    // to run analyze_application() when the user had previously selected
+    // "application" — giving wrong unused-file counts and wrong analysis mode.
+    //
+    // New logic:
+    //   - If no userType supplied → always use autoType (most common case)
+    //   - If userType supplied AND matches autoType → no real override
+    //   - If userType supplied AND differs from autoType:
+    //       * High confidence auto-detection → trust auto, flag override as ignored
+    //       * Low/uncertain auto-detection  → accept user override
+    //
+    // "High confidence" threshold: >= 0.70 (tier = "high" or strong "medium")
+
+    const HIGH_CONFIDENCE_THRESHOLD = 0.70;
+
+    let finalType;
+    let overridden = false;
+    let overrideIgnored = false;
+
+    if (!userType || userType === autoType) {
+      // No override or redundant override — just use auto
+      finalType = autoType;
+      overridden = false;
+    } else if (confidence >= HIGH_CONFIDENCE_THRESHOLD) {
+      // Auto-detection is confident — ignore the user override
+      // (prevents lodash being analyzed as "application" just because
+      //  the user clicked the wrong radio button)
+      finalType = autoType;
+      overridden = false;
+      overrideIgnored = true;
+      console.warn(
+        `[runScanner] userType="${userType}" ignored — ` +
+        `auto-detection is ${confidenceTier} confidence (${confidence}) for "${autoType}"`
+      );
+    } else {
+      // Auto-detection is uncertain — respect user override
+      finalType = userType;
+      overridden = true;
+    }
 
     // Step 3: Run dead-code analysis for the resolved type
     const analysis = await runPython(analyzerPath, [repoPath, finalType]);
 
+    // Step 4: Compute overall cleanliness score
+    // Penalise: 2pts per unused file, 1pt per unused dep, 0.5pt per unused export
+    // Scale down penalty when confidence is low (we're less sure about the results)
+    const penaltyScale  = Math.max(0.5, confidence);   // don't fully trust low-conf results
+    const filePenalty   = (analysis.files?.length         || 0) * 2;
+    const depPenalty    = (analysis.deps?.length           || 0) * 1;
+    const exportPenalty = (analysis.unusedExports?.length || 0) * 0.5;
+    const overall       = Math.round(
+      Math.max(0, 100 - (filePenalty + depPenalty + exportPenalty) * penaltyScale)
+    );
+
     return {
       repoType: {
         autoType,
-        userType:   userType || null,
+        userType:       userType || null,
         finalType,
         confidence,
-        overridden: Boolean(userType),
+        confidenceTier,
+        overridden,
+        overrideIgnored,  // true when user tried to override but auto-detection won
       },
 
       // Normalise files: knip returns plain strings in some modes,
@@ -133,14 +179,9 @@ export async function runScanner(repoPath, userType = null) {
       },
 
       scores: {
-        // Rough cleanliness score: penalise 2 pts per unused file, 1 per unused dep
-        overall: Math.max(
-          0,
-          100 -
-            (analysis.files?.length || 0) * 2 -
-            (analysis.deps?.length  || 0)
-        ),
-        reliability: confidence,
+        overall,
+        reliability:    confidence,
+        confidenceTier,
       },
 
       analysisMode: analysis.mode || finalType,
