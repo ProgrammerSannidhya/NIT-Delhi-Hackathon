@@ -5,7 +5,7 @@ import authRoutes from "./routes/authRoutes.js";
 import userRoutes from "./routes/userRoutes.js";
 import healthRoutes from "./routes/healthRoutes.js";
 import analyzeRoutes from "./routes/analyzeRoutes.js";
-
+import { swaggerRouter } from "./docs/swagger.js";
 /* ================= MIDDLEWARE ================= */
 import { errorHandling } from "./middleware/errorHandler.js";
 import { globalLimiter } from "./middleware/rateLimiter.js";
@@ -42,7 +42,7 @@ app.use("/auth", authRoutes);
 app.use("/users", userRoutes);
 app.use("/analyze", analyzeRoutes);
 app.use("/", healthRoutes);
-
+app.use(swaggerRouter);  
 /* ================= ROOT ================= */
 app.get("/", (req, res) => {
 res.json({ message: "Server running" });

@@ -1,0 +1,810 @@
+{
+  "openapi": "3.0.0",
+  "info": {
+    "title": "CodePlus Backend API",
+    "version": "1.0.0",
+    "description": "API for analysing GitHub repositories for dead code, unused exports, and unused dependencies."
+  },
+  "servers": [
+    {
+      "url": "http://localhost:3000",
+      "description": "Local development server"
+    }
+  ],
+  "components": {
+    "securitySchemes": {
+      "bearerAuth": {
+        "type": "http",
+        "scheme": "bearer",
+        "bearerFormat": "JWT"
+      }
+    },
+    "schemas": {
+      "SuccessResponse": {
+        "type": "object",
+        "properties": {
+          "status": { "type": "string", "example": "success" },
+          "message": { "type": "string" },
+          "data": {}
+        }
+      },
+      "ErrorResponse": {
+        "type": "object",
+        "properties": {
+          "status": { "type": "string", "example": "error" },
+          "message": { "type": "string" }
+        }
+      },
+      "FailResponse": {
+        "type": "object",
+        "properties": {
+          "status": { "type": "string", "example": "fail" },
+          "message": { "type": "string" }
+        }
+      },
+      "AuthCredentials": {
+        "type": "object",
+        "required": ["username", "password"],
+        "properties": {
+          "username": { "type": "string", "example": "alice" },
+          "password": { "type": "string", "example": "Secure1password" }
+        }
+      },
+      "TokenPair": {
+        "type": "object",
+        "properties": {
+          "accessToken": { "type": "string" },
+          "refreshToken": { "type": "string" }
+        }
+      },
+      "User": {
+        "type": "object",
+        "properties": {
+          "id": { "type": "integer", "example": 1 },
+          "username": { "type": "string", "example": "alice" },
+          "role": { "type": "string", "enum": ["user", "admin"], "example": "user" }
+        }
+      },
+      "DecodedToken": {
+        "type": "object",
+        "properties": {
+          "id": { "type": "integer", "example": 1 },
+          "role": { "type": "string", "example": "user" }
+        }
+      },
+      "RefreshTokenBody": {
+        "type": "object",
+        "required": ["token"],
+        "properties": {
+          "token": { "type": "string", "example": "eyJhbGciOiJIUzI1NiIs..." }
+        }
+      },
+      "CreateUserBody": {
+        "type": "object",
+        "required": ["username"],
+        "properties": {
+          "username": { "type": "string", "minLength": 3, "maxLength": 30, "example": "newuser" }
+        }
+      },
+      "UpdateUserBody": {
+        "type": "object",
+        "required": ["username"],
+        "properties": {
+          "username": { "type": "string", "minLength": 3, "maxLength": 30, "example": "updatedname" }
+        }
+      },
+      "AnalyzeRequestBody": {
+        "type": "object",
+        "required": ["repoLink"],
+        "properties": {
+          "repoLink": {
+            "type": "string",
+            "example": "https://github.com/user/repo"
+          },
+          "userType": {
+            "type": "string",
+            "enum": ["application", "library", "framework", "cli", "plugin"],
+            "example": "application",
+            "description": "Optional hint for repo type classification"
+          }
+        }
+      },
+      "AnalysisQueued": {
+        "type": "object",
+        "properties": {
+          "cached": { "type": "boolean", "example": false },
+          "analysisId": { "type": "string", "example": "uuid-123" }
+        }
+      },
+      "AnalysisCached": {
+        "type": "object",
+        "properties": {
+          "cached": { "type": "boolean", "example": true },
+          "message": { "type": "string", "example": "Returned from cache" },
+          "data": { "type": "object" }
+        }
+      },
+      "Analysis": {
+        "type": "object",
+        "properties": {
+          "id": { "type": "string" },
+          "user_id": { "type": "integer" },
+          "repo_url": { "type": "string" },
+          "status": {
+            "type": "string",
+            "enum": ["pending", "running", "completed", "failed", "waiting_for_user", "applying_changes", "applying", "apply_failed"]
+          },
+          "result": { "type": "object", "nullable": true },
+          "filtered_result": { "type": "object", "nullable": true },
+          "created_at": { "type": "string", "format": "date-time" },
+          "started_at": { "type": "string", "format": "date-time", "nullable": true },
+          "completed_at": { "type": "string", "format": "date-time", "nullable": true }
+        }
+      },
+      "ApplyBody": {
+        "type": "object",
+        "properties": {
+          "files": {
+            "type": "array",
+            "items": { "type": "string" },
+            "example": ["src/unused.js", "lib/old.js"]
+          },
+          "deps": {
+            "type": "array",
+            "items": { "type": "string" },
+            "example": ["lodash", "moment"]
+          }
+        }
+      },
+      "HealthCheck": {
+        "type": "object",
+        "properties": {
+          "status": { "type": "string", "example": "ok" },
+          "uptime": { "type": "number", "example": 123.45 },
+          "timestamp": { "type": "string", "format": "date-time" }
+        }
+      },
+      "ReadinessCheck": {
+        "type": "object",
+        "properties": {
+          "status": { "type": "string", "example": "ready" },
+          "db": { "type": "string", "example": "connected" },
+          "timestamp": { "type": "string", "format": "date-time" }
+        }
+      }
+    }
+  },
+  "paths": {
+    "/auth/register": {
+      "post": {
+        "tags": ["Auth"],
+        "summary": "Register a new user",
+        "description": "Creates a new user account. Password must be 8+ characters with at least one uppercase letter, one lowercase letter, and one number.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": { "$ref": "#/components/schemas/AuthCredentials" }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "User registered successfully",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "allOf": [
+                    { "$ref": "#/components/schemas/SuccessResponse" },
+                    {
+                      "properties": {
+                        "data": { "$ref": "#/components/schemas/User" }
+                      }
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid username or password (too short, missing complexity, or already taken)",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/FailResponse" }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal server error",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/ErrorResponse" }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/auth/login": {
+      "post": {
+        "tags": ["Auth"],
+        "summary": "Log in",
+        "description": "Authenticates a user and returns an access token plus a refresh token. Accounts are locked for 15 minutes after 5 failed attempts.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": { "$ref": "#/components/schemas/AuthCredentials" }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Login successful — returns token pair",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "allOf": [
+                    { "$ref": "#/components/schemas/SuccessResponse" },
+                    {
+                      "properties": {
+                        "data": { "$ref": "#/components/schemas/TokenPair" }
+                      }
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Validation error (missing or malformed fields)",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/FailResponse" }
+              }
+            }
+          },
+          "401": {
+            "description": "Invalid credentials",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/FailResponse" }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal server error",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/ErrorResponse" }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/auth/refresh": {
+      "post": {
+        "tags": ["Auth"],
+        "summary": "Rotate refresh token",
+        "description": "Validates the provided refresh token against the database, then issues a new access token and a new refresh token (rotation).",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": { "$ref": "#/components/schemas/RefreshTokenBody" }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Tokens rotated successfully",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "allOf": [
+                    { "$ref": "#/components/schemas/SuccessResponse" },
+                    {
+                      "properties": {
+                        "data": { "$ref": "#/components/schemas/TokenPair" }
+                      }
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Missing or invalid request body",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/FailResponse" }
+              }
+            }
+          },
+          "403": {
+            "description": "Refresh token not found in store or JWT verification failed",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/FailResponse" }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal server error",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/ErrorResponse" }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/auth/logout": {
+      "post": {
+        "tags": ["Auth"],
+        "summary": "Log out",
+        "description": "Deletes the provided refresh token from the database, effectively invalidating the session.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": { "$ref": "#/components/schemas/RefreshTokenBody" }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Logged out successfully",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "allOf": [
+                    { "$ref": "#/components/schemas/SuccessResponse" },
+                    { "properties": { "data": { "nullable": true, "example": null } } }
+                  ]
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Token field missing",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/FailResponse" }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal server error",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/ErrorResponse" }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/auth/me": {
+      "get": {
+        "tags": ["Auth"],
+        "summary": "Get current authenticated user",
+        "description": "Returns the decoded JWT payload (id and role) for the currently authenticated user.",
+        "security": [{ "bearerAuth": [] }],
+        "responses": {
+          "200": {
+            "description": "Authenticated user info",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "allOf": [
+                    { "$ref": "#/components/schemas/SuccessResponse" },
+                    {
+                      "properties": {
+                        "data": { "$ref": "#/components/schemas/DecodedToken" }
+                      }
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid Bearer token",
+            "content": {
+              "application/json": {
+                "schema": { "type": "object", "properties": { "error": { "type": "string" } } }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/users": {
+      "post": {
+        "tags": ["Users"],
+        "summary": "Create a user (admin only)",
+        "description": "Creates a new user record. Requires admin role. Username must be 3–30 characters.",
+        "security": [{ "bearerAuth": [] }],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": { "$ref": "#/components/schemas/CreateUserBody" }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "User created",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "allOf": [
+                    { "$ref": "#/components/schemas/SuccessResponse" },
+                    { "properties": { "data": { "$ref": "#/components/schemas/User" } } }
+                  ]
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Validation error or duplicate username",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/FailResponse" }
+              }
+            }
+          },
+          "401": { "description": "Unauthenticated" },
+          "403": { "description": "Forbidden — admin role required" },
+          "500": { "description": "Internal server error" }
+        }
+      },
+      "get": {
+        "tags": ["Users"],
+        "summary": "List all users (admin only)",
+        "description": "Returns all users in the system. Requires admin role.",
+        "security": [{ "bearerAuth": [] }],
+        "responses": {
+          "200": {
+            "description": "List of users",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "allOf": [
+                    { "$ref": "#/components/schemas/SuccessResponse" },
+                    {
+                      "properties": {
+                        "data": {
+                          "type": "array",
+                          "items": { "$ref": "#/components/schemas/User" }
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "401": { "description": "Unauthenticated" },
+          "403": { "description": "Forbidden — admin role required" }
+        }
+      }
+    },
+    "/users/{id}": {
+      "get": {
+        "tags": ["Users"],
+        "summary": "Get user by ID",
+        "description": "Returns a single user. Admins can fetch any user; regular users can only fetch their own record.",
+        "security": [{ "bearerAuth": [] }],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": { "type": "integer" },
+            "description": "Numeric user ID"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "User found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "allOf": [
+                    { "$ref": "#/components/schemas/SuccessResponse" },
+                    { "properties": { "data": { "$ref": "#/components/schemas/User" } } }
+                  ]
+                }
+              }
+            }
+          },
+          "400": { "description": "Invalid user ID" },
+          "401": { "description": "Unauthenticated" },
+          "403": { "description": "Forbidden — accessing another user's record" },
+          "404": { "description": "User not found" }
+        }
+      },
+      "put": {
+        "tags": ["Users"],
+        "summary": "Update user by ID",
+        "description": "Updates the username for a user. Admins can update any user; regular users can only update their own record.",
+        "security": [{ "bearerAuth": [] }],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": { "type": "integer" },
+            "description": "Numeric user ID"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": { "$ref": "#/components/schemas/UpdateUserBody" }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "User updated",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "allOf": [
+                    { "$ref": "#/components/schemas/SuccessResponse" },
+                    { "properties": { "data": { "$ref": "#/components/schemas/User" } } }
+                  ]
+                }
+              }
+            }
+          },
+          "400": { "description": "Validation error" },
+          "401": { "description": "Unauthenticated" },
+          "403": { "description": "Forbidden" },
+          "404": { "description": "User not found" }
+        }
+      },
+      "delete": {
+        "tags": ["Users"],
+        "summary": "Delete user by ID (admin only)",
+        "description": "Permanently deletes a user. Requires admin role.",
+        "security": [{ "bearerAuth": [] }],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": { "type": "integer" },
+            "description": "Numeric user ID"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "User deleted",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "allOf": [
+                    { "$ref": "#/components/schemas/SuccessResponse" },
+                    { "properties": { "data": { "$ref": "#/components/schemas/User" } } }
+                  ]
+                }
+              }
+            }
+          },
+          "400": { "description": "Invalid user ID" },
+          "401": { "description": "Unauthenticated" },
+          "403": { "description": "Forbidden — admin role required" },
+          "404": { "description": "User not found" }
+        }
+      }
+    },
+    "/analyze": {
+      "post": {
+        "tags": ["Analyze"],
+        "summary": "Start a repository analysis",
+        "description": "Submits a GitHub repository URL for dead-code analysis. Returns a cached result immediately if the same repo+branch+commit was previously analysed, otherwise enqueues a scan job and returns 202 with an analysisId to poll.",
+        "security": [{ "bearerAuth": [] }],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": { "$ref": "#/components/schemas/AnalyzeRequestBody" }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Cached result returned",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/AnalysisCached" }
+              }
+            }
+          },
+          "202": {
+            "description": "Analysis job queued — poll GET /analyze/:id for status",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/AnalysisQueued" }
+              }
+            }
+          },
+          "400": {
+            "description": "Missing repoLink",
+            "content": {
+              "application/json": {
+                "schema": { "type": "object", "properties": { "error": { "type": "string" } } }
+              }
+            }
+          },
+          "401": { "description": "Unauthenticated" },
+          "500": { "description": "Internal server error" }
+        }
+      },
+      "get": {
+        "tags": ["Analyze"],
+        "summary": "List analyses for the current user",
+        "description": "Returns all analysis records owned by the authenticated user, ordered by creation date descending.",
+        "security": [{ "bearerAuth": [] }],
+        "responses": {
+          "200": {
+            "description": "List of analyses",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": { "$ref": "#/components/schemas/Analysis" }
+                }
+              }
+            }
+          },
+          "401": { "description": "Unauthenticated" }
+        }
+      }
+    },
+    "/analyze/{id}": {
+      "get": {
+        "tags": ["Analyze"],
+        "summary": "Get a single analysis by ID",
+        "description": "Returns the analysis record for the given ID. Only the owning user can retrieve their own analyses.",
+        "security": [{ "bearerAuth": [] }],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": { "type": "integer" },
+            "description": "Numeric analysis ID"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Analysis record",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/Analysis" }
+              }
+            }
+          },
+          "401": { "description": "Unauthenticated" },
+          "404": {
+            "description": "Analysis not found",
+            "content": {
+              "application/json": {
+                "schema": { "type": "object", "properties": { "error": { "type": "string" } } }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/analyze/{id}/apply": {
+      "post": {
+        "tags": ["Apply"],
+        "summary": "Apply cleanup changes for an analysis",
+        "description": "Forks the repository, removes the specified unused files and dependencies, commits the changes, pushes to a new branch, and opens a pull request. Idempotent — returns the existing PR if one already exists for this commit.",
+        "security": [{ "bearerAuth": [] }],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": { "type": "integer" },
+            "description": "Numeric analysis ID"
+          }
+        ],
+        "requestBody": {
+          "required": false,
+          "content": {
+            "application/json": {
+              "schema": { "$ref": "#/components/schemas/ApplyBody" }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Apply job queued",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "message": { "type": "string", "example": "Apply queued" }
+                  }
+                }
+              }
+            }
+          },
+          "401": { "description": "Unauthenticated" },
+          "404": {
+            "description": "Analysis not found",
+            "content": {
+              "application/json": {
+                "schema": { "type": "object", "properties": { "error": { "type": "string" } } }
+              }
+            }
+          },
+          "500": { "description": "Internal server error" }
+        }
+      }
+    },
+    "/health": {
+      "get": {
+        "tags": ["Health"],
+        "summary": "Liveness check",
+        "description": "Returns 200 with server uptime. Always succeeds if the process is running.",
+        "responses": {
+          "200": {
+            "description": "Server is alive",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/HealthCheck" }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/ready": {
+      "get": {
+        "tags": ["Health"],
+        "summary": "Readiness check",
+        "description": "Executes a simple DB query (`SELECT 1`) to verify database connectivity.",
+        "responses": {
+          "200": {
+            "description": "Server is ready and database is connected",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/ReadinessCheck" }
+              }
+            }
+          },
+          "503": {
+            "description": "Database is not reachable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "status": { "type": "string", "example": "not_ready" },
+                    "db": { "type": "string", "example": "disconnected" },
+                    "error": { "type": "string" },
+                    "timestamp": { "type": "string", "format": "date-time" }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+}
