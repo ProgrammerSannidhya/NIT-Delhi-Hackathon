@@ -9,6 +9,15 @@ services:
       - REDIS_HOST=redis
       - REDIS_PORT=6379
 
+  worker:
+    build: .
+    command: node workers/analyzeWorker.js
+    depends_on:
+      - redis
+    environment:
+      - REDIS_HOST=redis
+      - REDIS_PORT=6379
+
   redis:
     image: redis:7
     ports:

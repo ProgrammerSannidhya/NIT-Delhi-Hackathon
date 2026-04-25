@@ -16,10 +16,10 @@ import {
 
 /* ================= REDIS CONNECTION ================= */
 const connection = new IORedis({
-    host: process.env.REDIS_HOST || "redis",   // 🔥 important
-    port: process.env.REDIS_PORT || 6379
+    host: process.env.REDIS_HOST || "redis",
+    port: process.env.REDIS_PORT || 6379,
+    maxRetriesPerRequest: null
 });
-
 /* ================= WORKER ================= */
 new Worker(
     "analysis",
