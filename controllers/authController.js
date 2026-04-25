@@ -65,6 +65,11 @@ export const login = async (req, res, next) => {
 
 /* ================= REFRESH (ROTATION) ================= */
 export const refresh = async (req, res, next) => {
+        if (!req.body || typeof req.body !== "object") {
+    return res.status(400).json({
+        error: "Request body is missing or not JSON. Set Content-Type: application/json."
+    });
+}
     try {
         const { token } = req.body;
 
