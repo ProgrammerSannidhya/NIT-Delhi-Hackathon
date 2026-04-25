@@ -6,7 +6,7 @@ import { getReposBaseDir } from "./clonerepo.js";
 
 const BASE_DIR = getReposBaseDir();
 
-export default function deleteRepo(repoPath) {
+export  function deleteRepo(repoPath) {
     if (!repoPath) {
         console.warn("deleteRepo called with empty path");
         return;
