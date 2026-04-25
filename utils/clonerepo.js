@@ -4,29 +4,34 @@ import fs from "fs";
 
 const BASE_DIR = path.resolve("repos");
 
+/* ✅ REQUIRED EXPORT (fixes your crash) */
 export const getReposBaseDir = () => BASE_DIR;
 
 export async function cloneRepo(repoUrl) {
-if (!repoUrl || typeof repoUrl !== "string") {
-throw new Error("Invalid repo URL");
-}
+    if (!repoUrl || typeof repoUrl !== "string") {
+        throw new Error("Invalid repo URL");
+    }
 
-if (!fs.existsSync(BASE_DIR)) {
-    fs.mkdirSync(BASE_DIR, { recursive: true });
-}
+    if (!fs.existsSync(BASE_DIR)) {
+        fs.mkdirSync(BASE_DIR, { recursive: true });
+    }
 
-const repoName = repoUrl
-    .split("/")
-    .pop()
-    .replace(".git", "");
+    const token = process.env.GITHUB_TOKEN;
 
-const target = path.join(BASE_DIR, `${repoName}_${Date.now()}`);
+    const authUrl = token
+        ? repoUrl.replace("https://", `https://${token}@`)
+        : repoUrl;
 
-console.log("CLONING INTO:", target);
+    const repoName = repoUrl
+        .split("/")
+        .pop()
+        .replace(".git", "");
 
-await simpleGit().clone(repoUrl, target, ["--depth", "1"]);
+    const target = path.join(BASE_DIR, `${repoName}_${Date.now()}`);
 
-return target;
+    console.log("CLONING INTO:", target);
 
+    await simpleGit().clone(authUrl, target, ["--depth", "1"]);
 
+    return target;
 }
