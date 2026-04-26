@@ -1,0 +1,41 @@
+services:
+
+* type: web
+  name: codeplus-api
+  env: docker
+  plan: free
+  dockerfilePath: ./Dockerfile
+  startCommand: node server.js
+  envVars:
+
+  * key: NODE_ENV
+    value: production
+  * key: PORT
+    value: 3000
+  * key: DATABASE_URL
+    sync: false
+  * key: REDIS_URL
+    sync: false
+  * key: GITHUB_TOKEN
+    sync: false
+  * key: GITHUB_USERNAME
+    sync: false
+
+* type: worker
+  name: codeplus-worker
+  env: docker
+  plan: free
+  dockerfilePath: ./Dockerfile
+  startCommand: node workers/analyzeWorker.js
+  envVars:
+
+  * key: NODE_ENV
+    value: production
+  * key: DATABASE_URL
+    sync: false
+  * key: REDIS_URL
+    sync: false
+  * key: GITHUB_TOKEN
+    sync: false
+  * key: GITHUB_USERNAME
+    sync: false

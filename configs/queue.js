@@ -1,16 +1,18 @@
 import { Queue } from "bullmq";
 import IORedis from "ioredis";
 
-const connection = new IORedis({
-host: process.env.REDIS_HOST || "redis",
-port: process.env.REDIS_PORT || 6379,
-maxRetriesPerRequest: null
+/* 🔴 Use REDIS_URL directly */
+const connection = new IORedis(process.env.REDIS_URL, {
+    maxRetriesPerRequest: null,
+
+    // required for Redis Cloud (TLS)
+    tls: process.env.REDIS_URL.startsWith("rediss://") ? {} : undefined
 });
 
-// export connection (worker needs this)
+/* export connection for worker */
 export { connection };
 
-// queue instance (API uses this)
+/* queue for API */
 export const analysisQueue = new Queue("analysisQueue", {
-connection
+    connection
 });

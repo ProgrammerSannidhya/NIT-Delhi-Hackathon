@@ -5,8 +5,6 @@ WORKDIR /app
 COPY package*.json ./
 RUN npm install
 
-# install analysis tools globally
-
 RUN npm install -g knip depcheck eslint
 
 COPY . .

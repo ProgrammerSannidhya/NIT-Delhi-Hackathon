@@ -45,7 +45,8 @@ app.use("/", healthRoutes);
 app.use(swaggerRouter);  
 /* ================= ROOT ================= */
 app.get("/", (req, res) => {
-res.json({ message: "Server running" });
+    res.send("Server Running");
+
 });
 
 /* ================= ERROR ================= */
