@@ -17,7 +17,7 @@ export const fail = (res, message = "Bad Request", status = 400) => {
 
 export const error = (res, message = "Something went wrong", status = 500) => {
     return res.status(status).json({
-        status: "error",
+        status: "failed",
         message
     });
 };

@@ -8,7 +8,7 @@ export const errorHandling = (err, req, res, next) => {
     const statusCode = err.statusCode || 500;
 
     res.status(statusCode).json({
-        status: "error",
+        status: "failed",
         message: err.message || "Something went wrong"
     });
 };

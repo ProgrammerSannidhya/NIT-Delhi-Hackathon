@@ -104,3 +104,25 @@
 {"level":"info","message":{"duration":"5043ms","ip":"::1","method":"POST","status":200,"url":"/auth/refresh","userId":null},"timestamp":"2026-04-23T18:44:48.569Z"}
 {"level":"info","message":{"duration":"2662ms","ip":"::1","method":"POST","status":500,"url":"/analyze","userId":2},"timestamp":"2026-04-23T18:45:44.602Z"}
 {"level":"info","message":{"duration":"39457ms","ip":"::1","method":"POST","status":200,"url":"/analyze","userId":2},"timestamp":"2026-04-23T18:46:59.415Z"}
+{"code":"23514","constraint":"analyses_status_check","detail":"Failing row contains (7, 1, https://github.com/nitin-ece/zofo-main, queued, null, 2026-04-27 11:29:08.693261, null, null).","file":"execMain.c","length":309,"level":"error","line":"2033","name":"error","routine":"ExecConstraints","schema":"public","severity":"ERROR","table":"analyses","timestamp":"2026-04-27T11:29:08.703Z"}
+{"level":"info","message":{"duration":"977ms","ip":"::1","method":"POST","status":500,"url":"/analyze","userId":1},"timestamp":"2026-04-27T11:29:08.712Z"}
+{"code":"23514","constraint":"analyses_status_check","detail":"Failing row contains (8, 1, https://github.com/nitin-ece/zofo-main, queued, null, 2026-04-27 11:29:52.081637, null, null).","file":"execMain.c","length":309,"level":"error","line":"2033","name":"error","routine":"ExecConstraints","schema":"public","severity":"ERROR","table":"analyses","timestamp":"2026-04-27T11:29:52.074Z"}
+{"level":"info","message":{"duration":"940ms","ip":"::1","method":"POST","status":500,"url":"/analyze","userId":1},"timestamp":"2026-04-27T11:29:52.081Z"}
+{"level":"info","message":{"duration":"2144ms","ip":"::1","method":"POST","status":200,"url":"/auth/login","userId":null},"timestamp":"2026-04-27T11:31:19.574Z"}
+{"level":"info","message":{"duration":"2759ms","ip":"::1","method":"POST","status":200,"url":"/auth/login","userId":null},"timestamp":"2026-04-27T11:32:21.958Z"}
+{"level":"info","message":{"duration":"3676ms","ip":"::1","method":"POST","status":202,"url":"/analyze","userId":1},"timestamp":"2026-04-27T11:37:46.664Z"}
+{"level":"info","message":{"duration":"3922ms","ip":"::1","method":"POST","status":202,"url":"/analyze","userId":1},"timestamp":"2026-04-27T11:48:30.262Z"}
+{"level":"info","message":{"duration":"1787ms","ip":"::1","method":"POST","status":202,"url":"/analyze","userId":1},"timestamp":"2026-04-27T11:51:14.477Z"}
+{"level":"info","message":{"duration":"2995ms","ip":"::1","method":"POST","status":202,"url":"/analyze","userId":1},"timestamp":"2026-04-27T11:56:01.922Z"}
+{"level":"info","message":{"duration":"1685ms","ip":"::1","method":"POST","status":202,"url":"/analyze","userId":1},"timestamp":"2026-04-27T11:58:00.124Z"}
+{"level":"info","message":{"duration":"2244ms","ip":"::1","method":"POST","status":202,"url":"/analyze","userId":1},"timestamp":"2026-04-27T11:58:16.374Z"}
+{"level":"info","message":{"duration":"1676ms","ip":"::1","method":"POST","status":202,"url":"/analyze","userId":1},"timestamp":"2026-04-27T12:02:35.243Z"}
+{"level":"info","message":{"duration":"3667ms","ip":"::1","method":"POST","status":202,"url":"/analyze","userId":1},"timestamp":"2026-04-27T12:10:36.849Z"}
+{"level":"info","message":{"duration":"1893ms","ip":"::1","method":"POST","status":202,"url":"/analyze","userId":1},"timestamp":"2026-04-27T12:15:08.721Z"}
+{"level":"info","message":{"duration":"11ms","ip":"::1","method":"POST","status":401,"url":"/analyze","userId":null},"timestamp":"2026-04-27T12:18:22.187Z"}
+{"level":"info","message":{"duration":"2176ms","ip":"::1","method":"POST","status":200,"url":"/auth/login","userId":null},"timestamp":"2026-04-27T12:22:21.641Z"}
+{"level":"info","message":{"duration":"3291ms","ip":"::1","method":"POST","status":200,"url":"/analyze","userId":1},"timestamp":"2026-04-27T12:23:03.417Z"}
+{"level":"info","message":{"duration":"3178ms","ip":"::1","method":"POST","status":200,"url":"/analyze/17/apply","userId":1},"timestamp":"2026-04-27T12:24:52.471Z"}
+{"level":"error","timestamp":"2026-04-27T12:27:09.480Z"}
+{"level":"info","message":{"duration":"423ms","ip":"::1","method":"POST","status":500,"url":"/analyze/17/apply","userId":1},"timestamp":"2026-04-27T12:27:09.493Z"}
+{"level":"info","message":{"duration":"2945ms","ip":"::1","method":"POST","status":200,"url":"/analyze/16/apply","userId":1},"timestamp":"2026-04-27T12:27:27.290Z"}

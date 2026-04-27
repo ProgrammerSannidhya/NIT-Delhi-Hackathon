@@ -6,8 +6,8 @@ import { deleteRepo } from "../utils/deleterepo.js";
 import { runScanner } from "../utils/runscan.js";
 
 import {
-    updateAnalysis,
-    getAnalysisById
+updateAnalysis,
+getAnalysisById
 } from "../models/analyzeModel.js";
 
 import { upsertRepoCache } from "../models/repoCacheModel.js";
@@ -15,197 +15,189 @@ import { upsertRepoCache } from "../models/repoCacheModel.js";
 import { prepareGit, commitAndPush } from "../utils/gitHelper.js";
 import { forkRepo, createPullRequest } from "../utils/githubHelper.js";
 
-import {
-    findExistingPR,
-    createPRRecord
-} from "../models/repoPRModel.js";
-
 import fs from "fs";
 import path from "path";
 
-/* ---------------- VALIDATION ---------------- */
-const isValidResult = (result) => {
-    if (!result || result.error) return false;
+console.log("Worker starting");
 
-    const total =
-        (result.unusedFiles?.length || 0) +
-        (result.unusedExports?.length || 0) +
-        (result.unusedDeps?.length || 0);
-
-    return total > 0;
-};
-
-/* ---------------- SCAN ---------------- */
+/* ================= SCAN ================= */
 const handleScan = async (job) => {
-    const { analysisId, repoLink, userType, branch, commitSha } = job.data;
+const { analysisId, repoLink, userType, branch, commitSha } = job.data;
 
-    let repoPath;
+    
+let repoPath;
 
-    try {
-        await updateAnalysis(analysisId, { status: "processing" });
+try {
+    console.log("SCAN START:", analysisId, "Attempt:", job.attemptsMade + 1);
 
-        repoPath = await cloneRepo(repoLink);
+    await updateAnalysis(analysisId, { status: "processing" });
 
-        const result = await runScanner(repoPath, userType);
+    repoPath = await cloneRepo(repoLink);
 
-        if (!isValidResult(result)) {
-            throw new Error("Invalid result");
+    const result = await runScanner(repoPath, userType);
+
+    await updateAnalysis(analysisId, {
+        result,
+        status: "waiting_for_user",
+        commit_sha: commitSha,
+        branch
+    });
+
+    /* ===== VALID CACHE WRITE ===== */
+    const hasSignal =
+        result?.unusedFiles?.length ||
+        result?.unusedDeps?.length ||
+        result?.unusedExports?.length;
+
+    if (hasSignal) {
+        try {
+            await upsertRepoCache(repoLink, branch, commitSha, result);
+            console.log("CACHE STORED:", analysisId);
+        } catch (cacheErr) {
+            console.error("CACHE ERROR (ignored):", cacheErr.message);
         }
+    } else {
+        console.log("SKIP CACHE (empty result):", analysisId);
+    }
 
-        await updateAnalysis(analysisId, {
-            result,
-            filtered_result: null,
-            status: "waiting_for_user",
-            commit_sha: commitSha,
-            branch
-        });
+    console.log("SCAN DONE:", analysisId);
 
-        await upsertRepoCache(repoLink, branch, commitSha, result);
+} catch (err) {
+    console.error("SCAN ERROR:", analysisId, err.message);
 
-    } catch (err) {
-        console.error("SCAN ERROR:", err);
+    /* ===== FINAL FAILURE AFTER 3 ATTEMPTS ===== */
+    if (job.attemptsMade >= 2) {
+        console.log("FINAL FAILURE:", analysisId);
 
         await updateAnalysis(analysisId, {
             status: "failed"
         });
-
-    } finally {
-        if (repoPath && fs.existsSync(repoPath)) {
-            deleteRepo(repoPath);
-        }
     }
+
+    throw err;
+
+} finally {
+    if (repoPath && fs.existsSync(repoPath)) {
+        deleteRepo(repoPath);
+    }
+}
+    
+
 };
 
-/* ---------------- APPLY ---------------- */
+/* ================= APPLY ================= */
 const handleApply = async (job) => {
-    const { analysisId, files = [], deps = [] } = job.data;
+const { analysisId, files = [], deps = [] } = job.data;
 
-    let repoPath;
+    
+let repoPath;
 
-    try {
-        await updateAnalysis(analysisId, {
-            status: "applying_changes"
-        });
+try {
+    console.log("APPLY START:", analysisId, "Attempt:", job.attemptsMade + 1);
 
-        const analysis = await getAnalysisById(analysisId);
+    await updateAnalysis(analysisId, {
+        status: "applying_changes"
+    });
 
-        /* 🔴 CHECK EXISTING PR */
-        const existing = await findExistingPR(
-            analysis.repo_url,
-            analysis.commit_sha
-        );
+    const analysis = await getAnalysisById(analysisId);
+    if (!analysis) throw new Error("Analysis not found");
 
-        if (existing) {
-            console.log("PR already exists:", existing.pr_url);
+    const forkUrl = await forkRepo(analysis.repo_url);
+    repoPath = await cloneRepo(forkUrl);
 
-            await updateAnalysis(analysisId, {
-                status: "completed",
-                pr_url: existing.pr_url
-            });
+    /* delete files */
+    for (const file of files) {
+        const fullPath = path.join(repoPath, file);
+        if (fs.existsSync(fullPath)) {
+            fs.rmSync(fullPath, { recursive: true, force: true });
+        }
+    }
 
-            return;
+    /* remove dependencies */
+    const pkgPath = path.join(repoPath, "package.json");
+
+    if (fs.existsSync(pkgPath)) {
+        const pkg = JSON.parse(fs.readFileSync(pkgPath, "utf-8"));
+
+        for (const dep of deps) {
+            delete pkg.dependencies?.[dep];
+            delete pkg.devDependencies?.[dep];
         }
 
-        /* 🔴 FORK */
-        const forkUrl = await forkRepo(analysis.repo_url);
+        fs.writeFileSync(pkgPath, JSON.stringify(pkg, null, 2));
+    }
 
-        /* 🔴 CLONE */
-        repoPath = await cloneRepo(forkUrl);
+    const { git, branch } = await prepareGit(repoPath, analysisId);
+    await commitAndPush(git, branch);
 
-        console.log("CLONED FOR APPLY:", repoPath);
+    const prUrl = await createPullRequest({
+        repoUrl: analysis.repo_url,
+        branch,
+        analysisId
+    });
 
-        /* 🔴 DELETE FILES */
-        for (let file of files) {
-            if (file.includes("/repos/")) {
-                const parts = file.split("/repos/");
-                file = parts[1].split("/").slice(1).join("/");
-            }
+    await updateAnalysis(analysisId, {
+        status: "completed",
+        pr_url: prUrl
+    });
 
-            const fullPath = path.join(repoPath, file);
+    console.log("APPLY DONE:", analysisId);
 
-            if (fs.existsSync(fullPath)) {
-                fs.rmSync(fullPath, { recursive: true, force: true });
-                console.log("DELETED:", fullPath);
-            }
-        }
+} catch (err) {
+    console.error("APPLY ERROR:", analysisId, err.message);
 
-        /* 🔴 DEP CLEANUP */
-        const pkgPath = path.join(repoPath, "package.json");
-
-        if (fs.existsSync(pkgPath)) {
-            const pkg = JSON.parse(fs.readFileSync(pkgPath));
-
-            let changed = false;
-
-            for (const dep of deps) {
-                if (pkg.dependencies?.[dep]) {
-                    delete pkg.dependencies[dep];
-                    changed = true;
-                }
-                if (pkg.devDependencies?.[dep]) {
-                    delete pkg.devDependencies[dep];
-                    changed = true;
-                }
-            }
-
-            if (changed) {
-                fs.writeFileSync(pkgPath, JSON.stringify(pkg, null, 2));
-            }
-        }
-
-        /* 🔴 GIT */
-        const { git, branch } = await prepareGit(repoPath, analysisId);
-
-        const pushedBranch = await commitAndPush(git, branch);
-
-        if (!pushedBranch) {
-            throw new Error("No changes → skipping PR");
-        }
-
-        /* 🔴 CREATE PR */
-        const prUrl = await createPullRequest({
-            repoUrl: analysis.repo_url,
-            branch,
-            analysisId,
-            base: analysis.branch || "main"
-        });
-
-        /* 🔴 SAVE PR RECORD */
-        await createPRRecord({
-            repoUrl: analysis.repo_url,
-            commitSha: analysis.commit_sha,
-            forkUrl,
-            branch,
-            prUrl
-        });
-
-        await updateAnalysis(analysisId, {
-            status: "completed",
-            pr_url: prUrl
-        });
-
-    } catch (err) {
-        console.error("APPLY ERROR:", err);
+    if (job.attemptsMade >= 2) {
+        console.log("FINAL APPLY FAILURE:", analysisId);
 
         await updateAnalysis(analysisId, {
             status: "apply_failed"
         });
-
-    } finally {
-        if (repoPath && fs.existsSync(repoPath)) {
-            deleteRepo(repoPath);
-        }
     }
+
+    throw err;
+
+} finally {
+    if (repoPath && fs.existsSync(repoPath)) {
+        deleteRepo(repoPath);
+    }
+}
+    
+
 };
 
-/* ---------------- WORKER ---------------- */
+/* ================= WORKER ================= */
 const worker = new Worker(
-    "analysisQueue",
-    async (job) => {
-        if (job.name === "scan") return handleScan(job);
-        if (job.name === "apply") return handleApply(job);
-    },
-    { connection }
+"analysisQueue",
+async (job) => {
+console.log("JOB RECEIVED:", job.name, job.id);
+
+    
+    if (job.name === "scan") return await handleScan(job);
+    if (job.name === "apply") return await handleApply(job);
+
+    throw new Error("Unknown job type");
+},
+{
+    connection,
+    concurrency: 5
+}
+    
+
 );
 
-export default worker;
+/* ================= EVENTS ================= */
+worker.on("active", (job) => {
+console.log("PROCESSING:", job.id);
+});
+
+worker.on("completed", (job) => {
+console.log("COMPLETED:", job.id);
+});
+
+worker.on("failed", (job, err) => {
+console.error("FAILED:", job?.id, err.message);
+});
+
+worker.on("error", (err) => {
+console.error("WORKER ERROR:", err);
+});

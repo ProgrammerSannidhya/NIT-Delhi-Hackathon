@@ -1,18 +1,50 @@
 import { Queue } from "bullmq";
 import IORedis from "ioredis";
 
-/* 🔴 Use REDIS_URL directly */
-const connection = new IORedis(process.env.REDIS_URL, {
-    maxRetriesPerRequest: null,
+/* ================= ENV CHECK ================= */
+if (!process.env.REDIS_URL) {
+throw new Error("REDIS_URL is not defined");
+}
 
-    // required for Redis Cloud (TLS)
-    tls: process.env.REDIS_URL.startsWith("rediss://") ? {} : undefined
+/* ================= REDIS CONNECTION ================= */
+export const connection = new IORedis(process.env.REDIS_URL, {
+maxRetriesPerRequest: null,
+enableReadyCheck: false
 });
 
-/* export connection for worker */
-export { connection };
+/* ================= CONNECTION LOGS ================= */
+connection.on("connect", () => {
+console.log("Redis connected");
+});
 
-/* queue for API */
+connection.on("ready", () => {
+console.log("Redis ready");
+});
+
+connection.on("error", (err) => {
+console.error("Redis error:", err);
+});
+
+connection.on("close", () => {
+console.warn("Redis connection closed");
+});
+
+/* ================= QUEUE ================= */
 export const analysisQueue = new Queue("analysisQueue", {
-    connection
+connection,
+defaultJobOptions: {
+attempts: 3,
+
+    
+    /* exponential retry: 2s → 4s → 8s */
+    backoff: {
+        type: "exponential",
+        delay: 2000
+    },
+
+    removeOnComplete: true,
+    removeOnFail: false
+}
+    
+
 });

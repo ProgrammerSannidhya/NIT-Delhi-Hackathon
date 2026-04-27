@@ -55,3 +55,6 @@
 {"level":"error","timestamp":"2026-04-23T18:37:38.083Z"}
 {"level":"error","timestamp":"2026-04-23T18:38:27.066Z"}
 {"level":"error","timestamp":"2026-04-23T18:39:47.410Z"}
+{"code":"23514","constraint":"analyses_status_check","detail":"Failing row contains (7, 1, https://github.com/nitin-ece/zofo-main, queued, null, 2026-04-27 11:29:08.693261, null, null).","file":"execMain.c","length":309,"level":"error","line":"2033","name":"error","routine":"ExecConstraints","schema":"public","severity":"ERROR","table":"analyses","timestamp":"2026-04-27T11:29:08.703Z"}
+{"code":"23514","constraint":"analyses_status_check","detail":"Failing row contains (8, 1, https://github.com/nitin-ece/zofo-main, queued, null, 2026-04-27 11:29:52.081637, null, null).","file":"execMain.c","length":309,"level":"error","line":"2033","name":"error","routine":"ExecConstraints","schema":"public","severity":"ERROR","table":"analyses","timestamp":"2026-04-27T11:29:52.074Z"}
+{"level":"error","timestamp":"2026-04-27T12:27:09.480Z"}
