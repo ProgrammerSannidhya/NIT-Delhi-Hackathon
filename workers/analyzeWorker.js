@@ -95,12 +95,18 @@ let repoPath;
 try {
     console.log("APPLY START:", analysisId, "Attempt:", job.attemptsMade + 1);
 
+    const analysis = await getAnalysisById(analysisId);
+    if (!analysis) throw new Error("Analysis not found");
+
+    /* ===== PREVENT DUPLICATE PR ===== */
+    if (analysis.pr_url) {
+        console.log("PR already exists, skipping:", analysisId);
+        return;
+    }
+
     await updateAnalysis(analysisId, {
         status: "applying_changes"
     });
-
-    const analysis = await getAnalysisById(analysisId);
-    if (!analysis) throw new Error("Analysis not found");
 
     const forkUrl = await forkRepo(analysis.repo_url);
     repoPath = await cloneRepo(forkUrl);
@@ -128,6 +134,7 @@ try {
     }
 
     const { git, branch } = await prepareGit(repoPath, analysisId);
+
     await commitAndPush(git, branch);
 
     const prUrl = await createPullRequest({
@@ -164,6 +171,7 @@ try {
     
 
 };
+
 
 /* ================= WORKER ================= */
 const worker = new Worker(
